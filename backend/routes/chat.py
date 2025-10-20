@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from typing import Dict, Any
 from datetime import datetime
 
@@ -12,6 +12,7 @@ from models.message import (
     ConfirmExecuteResponse
 )
 from agents.draft_agent import draft_agent
+from agents.orchestrator_agent import get_orchestrator_agent
 from services.supabase_service import SupabaseService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -23,81 +24,96 @@ async def send_message(
 ):
     """
     Send a chat message and receive AI response with updated draft.
-    
-    This endpoint:
-    1. Saves user's message to database
-    2. Loads conversation history
-    3. Calls draft agent to generate/refine strategy
-    4. Updates campaign draft_json
-    5. Saves assistant's response
-    6. Returns both messages
+    Uses Agno AI for intelligent strategy generation.
     """
     try:
         user_id = current_user["user_id"]
         campaign_id = request.campaign_id
+        
+        print(f"\n🔵 === NEW MESSAGE REQUEST (Agno AI) ===")
+        print(f"User ID: {user_id}")
+        print(f"Campaign ID: {campaign_id}")
+        print(f"Content: {request.content[:100]}...")
         
         # Initialize Supabase service with admin client
         supabase = get_admin_supabase_client()
         service = SupabaseService(supabase)
         
         # 1. Verify campaign belongs to user
+        print(f"🔍 Verifying campaign ownership...")
         campaign = service.get_campaign(campaign_id)
         if not campaign:
+            print(f"❌ Campaign not found: {campaign_id}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Campaign not found"
             )
         
         if campaign["user_id"] != user_id:
+            print(f"❌ Unauthorized access attempt")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this campaign"
             )
         
+        print(f"✅ Campaign verified")
+        
         # 2. Save user message
+        print(f"💾 Saving user message...")
         user_message = service.create_message(
             campaign_id=campaign_id,
             role="user",
             content=request.content
         )
+        print(f"✅ User message saved: {user_message['id']}")
         
         # 3. Get conversation history
+        print(f"📜 Fetching conversation history...")
         messages = service.get_campaign_messages(campaign_id)
         conversation_history = [
             {"role": msg["role"], "content": msg["content"]}
             for msg in messages[:-1]  # Exclude the message we just added
         ]
+        print(f"✅ Loaded {len(conversation_history)} previous messages")
         
-        # 4. Generate or refine draft
+        # 4. Generate or refine draft using Agno AI
         current_draft = campaign.get("draft_json")
         is_first_message = current_draft is None
         
+        print(f"🤖 Using Agno AI (first_message: {is_first_message})...")
+        
         if is_first_message:
-            # Generate initial draft
+            # Generate initial draft with Agno
             draft_json = await draft_agent.generate_initial_draft(
                 initial_prompt=request.content,
                 user_id=user_id
             )
             draft_updated = True
+            print(f"✅ Initial draft generated with Agno: {draft_json.get('title', 'N/A')}")
         else:
-            # Refine existing draft
+            # Refine existing draft with Agno
             draft_json = await draft_agent.refine_draft(
                 current_draft=current_draft,
                 user_message=request.content,
                 conversation_history=conversation_history
             )
             draft_updated = True
+            print(f"✅ Draft refined with Agno")
         
-        # 5. Generate conversational response
+        # 5. Generate conversational response using Agno's memory
+        print(f"💬 Generating conversational response with Agno...")
         assistant_content = await draft_agent.generate_conversational_response(
             draft=draft_json,
             user_message=request.content,
-            conversation_history=conversation_history
+            conversation_history=conversation_history,
+            campaign_id=campaign_id  # Session ID for Agno's memory
         )
+        print(f"✅ Response generated: {assistant_content[:100]}...")
         
         # 6. Update campaign with new draft
         new_status = "draft_ready" if draft_json else "drafting"
         
+        print(f"💾 Updating campaign status to: {new_status}")
         updated_campaign = service.update_campaign(
             campaign_id=campaign_id,
             updates={
@@ -106,16 +122,21 @@ async def send_message(
                 "title": draft_json.get("title", campaign["title"])
             }
         )
+        print(f"✅ Campaign updated")
         
         # 7. Save assistant message
+        print(f"💾 Saving assistant message...")
         assistant_message = service.create_message(
             campaign_id=campaign_id,
             role="assistant",
             content=assistant_content,
             metadata={"draft_snapshot": draft_json}
         )
+        print(f"✅ Assistant message saved: {assistant_message['id']}")
         
         # 8. Return response
+        print(f"✅ === MESSAGE PROCESSING COMPLETE (Agno AI) ===\n")
+        
         return ChatResponse(
             user_message=MessageResponse(**user_message),
             assistant_message=MessageResponse(**assistant_message),
@@ -126,7 +147,9 @@ async def send_message(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in send_message: {e}")
+        print(f"❌ Error in send_message: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process message: {str(e)}"
@@ -135,87 +158,77 @@ async def send_message(
 @router.post("/confirm-execute", response_model=ConfirmExecuteResponse)
 async def confirm_execute(
     request: ConfirmExecuteRequest,
+    background_tasks: BackgroundTasks,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
-    Confirm the draft and start campaign execution.
-    
-    This endpoint:
-    1. Copies draft_json to final_draft_json
-    2. Updates status to 'executing'
-    3. Sets execution_started_at timestamp
-    4. Triggers orchestrator (Phase 2)
+    Confirm and execute campaign - triggers asset generation.
+    This starts the orchestrator agent in the background.
     """
     try:
-        user_id = current_user["user_id"]
-        campaign_id = request.campaign_id
-        
-        # Initialize Supabase service
         supabase = get_admin_supabase_client()
-        service = SupabaseService(supabase)
+        supabase_service = SupabaseService()
         
-        # 1. Verify campaign
-        campaign = service.get_campaign(campaign_id)
-        if not campaign:
+        # Get campaign
+        result = supabase.table("campaigns").select("*").eq(
+            "id", request.campaign_id
+        ).eq("user_id", current_user["sub"]).execute()
+        
+        if not result.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Campaign not found"
             )
         
-        if campaign["user_id"] != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this campaign"
-            )
+        campaign = result.data[0]
         
-        if campaign["status"] != "draft_ready":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Campaign is not ready to execute. Current status: {campaign['status']}"
-            )
-        
+        # Verify campaign has a draft
         if not campaign.get("draft_json"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No draft found. Please create a strategy first."
+                detail="Campaign has no draft to execute"
             )
         
-        # 2. Update campaign to executing status
-        execution_started_at = datetime.utcnow()
+        # Save final_draft_json (snapshot of draft before execution)
+        final_draft = campaign["draft_json"]
         
-        updated_campaign = service.update_campaign(
-            campaign_id=campaign_id,
-            updates={
-                "final_draft_json": campaign["draft_json"],
-                "status": "executing",
-                "execution_started_at": execution_started_at.isoformat()
-            }
+        supabase.table("campaigns").update({
+            "final_draft_json": final_draft,
+            "status": "executing",
+            "execution_started_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", request.campaign_id).execute()
+        
+        # Create confirmation message
+        await supabase_service.create_message(
+            campaign_id=request.campaign_id,
+            role="assistant",
+            content="Perfect! I'm starting the asset generation now. This will take a few minutes...",
+            metadata={"event": "execution_confirmed"}
         )
         
-        # 3. TODO: Trigger orchestrator to generate assets (Phase 2)
-        # from agents.orchestrator import orchestrator
-        # await orchestrator.execute_campaign(campaign_id, campaign["draft_json"])
-        
-        # 4. Save system message
-        service.create_message(
-            campaign_id=campaign_id,
-            role="system",
-            content="Campaign execution started. Generating assets...",
-            metadata={"event": "execution_started"}
+        # Start orchestrator agent in background
+        orchestrator = get_orchestrator_agent()
+        background_tasks.add_task(
+            orchestrator.execute_campaign,
+            request.campaign_id,
+            final_draft
         )
         
         return ConfirmExecuteResponse(
-            campaign_id=campaign_id,
-            status="executing",
-            message="Campaign execution started successfully",
-            execution_started_at=execution_started_at
+            success=True,
+            message="Asset generation started! You'll see progress updates in real-time.",
+            campaign_id=request.campaign_id,
+            status="executing"
         )
     
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in confirm_execute: {e}")
+        print(f"❌ Error in confirm-execute: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start campaign execution: {str(e)}"
+            detail=f"Failed to start execution: {str(e)}"
         )

@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     # AI
     GOOGLE_API_KEY: str  # Gemini API key
     
+    # External Services
+    SERPER_API_KEY: str  # Serper.dev API key
+    
     # App
     FRONTEND_URL: str = "http://localhost:5173"
     ENVIRONMENT: str = "development"
