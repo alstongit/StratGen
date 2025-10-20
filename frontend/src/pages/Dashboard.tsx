@@ -11,6 +11,7 @@ export const Dashboard = () => {
   const navigate = useNavigate()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     fetchCampaigns()
@@ -18,10 +19,13 @@ export const Dashboard = () => {
 
   const fetchCampaigns = async () => {
     try {
+      setLoading(true)
+      setError(null)
       const response = await api.get('/campaigns')
       setCampaigns(response.data)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching campaigns:', error)
+      setError(error.response?.data?.detail || 'Failed to fetch campaigns')
     } finally {
       setLoading(false)
     }
@@ -34,8 +38,9 @@ export const Dashboard = () => {
         initial_prompt: '',
       })
       navigate(`/strategy/${response.data.id}`)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating campaign:', error)
+      setError(error.response?.data?.detail || 'Failed to create campaign')
     }
   }
 
@@ -72,6 +77,12 @@ export const Dashboard = () => {
             New Campaign
           </Button>
         </div>
+
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-red-800 text-sm">{error}</p>
+          </div>
+        )}
 
         {loading ? (
           <div className="flex justify-center py-12">

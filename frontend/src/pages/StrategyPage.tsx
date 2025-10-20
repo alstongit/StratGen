@@ -5,29 +5,47 @@ import { ChatInterface } from '../components/Strategy/ChatInterface'
 import { DraftPreview } from '../components/Strategy/DraftPreview'
 import { ConfirmExecuteModal } from '../components/Strategy/ConfirmExecuteModal'
 import { Button } from '../components/ui/button'
-import { ArrowLeft, Rocket, Loader2, X } from 'lucide-react'
+import { ArrowLeft, Rocket, Loader2, X, MessageSquare, FileText } from 'lucide-react'
 import api from '../lib/api'
 
 export const StrategyPage = () => {
   const { campaignId } = useParams<{ campaignId: string }>()
   const navigate = useNavigate()
-  const { campaign, messages, loading, error } = useRealtimeCampaign(campaignId!)
+  const { campaign, messages, loading, error, refetch } = useRealtimeCampaign(campaignId!)
   
   const [isLoadingMessage, setIsLoadingMessage] = useState(false)
   const [showConfirmModal, setShowConfirmModal] = useState(false)
+  const [apiError, setApiError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'chat' | 'draft'>('chat')
 
   const handleSendMessage = async (content: string) => {
     if (!campaignId) return
 
     setIsLoadingMessage(true)
+    setApiError(null)
+
     try {
-      await api.post('/chat/message', {
+      console.log('📤 Sending message:', content)
+      
+      const response = await api.post('/chat/message', {
         campaign_id: campaignId,
         content,
       })
-    } catch (error) {
-      console.error('Error sending message:', error)
-      throw error
+      
+      console.log('✅ Message sent successfully:', response.data)
+      
+      // Manually refetch to get the latest data
+      await refetch()
+      
+      // Switch to draft tab to show updates
+      if (response.data.draft_updated) {
+        setTimeout(() => setActiveTab('draft'), 500)
+      }
+      
+    } catch (error: any) {
+      console.error('❌ Error sending message:', error)
+      console.error('Error details:', error.response?.data)
+      setApiError(error.response?.data?.detail || 'Failed to send message')
     } finally {
       setIsLoadingMessage(false)
     }
@@ -37,6 +55,7 @@ export const StrategyPage = () => {
     if (!campaignId) return
 
     try {
+      setApiError(null)
       await api.post('/chat/confirm-execute', {
         campaign_id: campaignId,
       })
@@ -47,9 +66,9 @@ export const StrategyPage = () => {
       setTimeout(() => {
         navigate(`/canvas/${campaignId}`)
       }, 1500)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error executing campaign:', error)
-      throw error
+      setApiError(error.response?.data?.detail || 'Failed to execute campaign')
     }
   }
 
@@ -123,12 +142,44 @@ export const StrategyPage = () => {
             </div>
           )}
         </div>
+
+        {apiError && (
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-red-800 text-sm">{apiError}</p>
+          </div>
+        )}
+
+        {/* Mobile Tab Switcher */}
+        <div className="mt-4 flex gap-2 md:hidden">
+          <button
+            onClick={() => setActiveTab('chat')}
+            className={`flex-1 py-2 px-4 rounded-lg font-medium text-sm transition-colors ${
+              activeTab === 'chat'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-gray-100 text-gray-700'
+            }`}
+          >
+            <MessageSquare className="w-4 h-4 inline mr-2" />
+            Chat
+          </button>
+          <button
+            onClick={() => setActiveTab('draft')}
+            className={`flex-1 py-2 px-4 rounded-lg font-medium text-sm transition-colors ${
+              activeTab === 'draft'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-gray-100 text-gray-700'
+            }`}
+          >
+            <FileText className="w-4 h-4 inline mr-2" />
+            Draft
+          </button>
+        </div>
       </div>
 
-      {/* Main Content - Split Screen */}
+      {/* Main Content - Responsive Split Screen */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Side - Chat */}
-        <div className="w-1/2 border-r">
+        {/* Desktop: Both visible, Mobile: Tabs */}
+        <div className={`w-full md:w-1/2 border-r ${activeTab === 'chat' ? 'block' : 'hidden md:block'}`}>
           <ChatInterface
             messages={messages}
             onSendMessage={handleSendMessage}
@@ -136,8 +187,7 @@ export const StrategyPage = () => {
           />
         </div>
 
-        {/* Right Side - Draft Preview */}
-        <div className="w-1/2">
+        <div className={`w-full md:w-1/2 ${activeTab === 'draft' ? 'block' : 'hidden md:block'}`}>
           <DraftPreview campaign={campaign} />
         </div>
       </div>

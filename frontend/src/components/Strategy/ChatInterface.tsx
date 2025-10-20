@@ -15,17 +15,26 @@ export const ChatInterface = ({ messages, onSendMessage, isLoading }: ChatInterf
   const [isSending, setIsSending] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (messagesContainerRef.current) {
+      const container = messagesContainerRef.current
+      const isScrolledToBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 100
+      
+      // Only auto-scroll if user is already near the bottom
+      if (isScrolledToBottom) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      }
+    }
   }, [messages])
 
   // Auto-resize textarea
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`
     }
   }, [input])
 
@@ -40,6 +49,8 @@ export const ChatInterface = ({ messages, onSendMessage, isLoading }: ChatInterf
       await onSendMessage(messageContent)
     } catch (error) {
       console.error('Error sending message:', error)
+      // Restore input on error
+      setInput(messageContent)
     } finally {
       setIsSending(false)
     }
@@ -54,16 +65,11 @@ export const ChatInterface = ({ messages, onSendMessage, isLoading }: ChatInterf
 
   return (
     <div className="flex flex-col h-full bg-white">
-      {/* Header */}
-      <div className="border-b px-6 py-4">
-        <h2 className="text-xl font-semibold text-gray-900">Campaign Strategy</h2>
-        <p className="text-sm text-gray-600 mt-1">
-          Describe your campaign and I'll help you create a comprehensive strategy
-        </p>
-      </div>
-
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+      <div 
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto px-6 py-4 space-y-4"
+      >
         {messages.length === 0 && !isLoading && (
           <div className="flex items-center justify-center h-full">
             <div className="text-center max-w-md">
@@ -100,8 +106,8 @@ export const ChatInterface = ({ messages, onSendMessage, isLoading }: ChatInterf
             <div className="bg-gray-100 rounded-2xl px-4 py-3">
               <div className="flex gap-1">
                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-100"></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-200"></div>
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
               </div>
             </div>
           </div>
@@ -111,22 +117,22 @@ export const ChatInterface = ({ messages, onSendMessage, isLoading }: ChatInterf
       </div>
 
       {/* Input */}
-      <div className="border-t px-6 py-4">
+      <div className="border-t px-6 py-4 bg-gray-50">
         <div className="flex gap-3 items-end">
           <textarea
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder="Describe your campaign..."
+            onKeyDown={handleKeyPress}
+            placeholder="Describe your campaign or request changes..."
             disabled={isSending || isLoading}
-            className="flex-1 resize-none border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500 max-h-32"
+            className="flex-1 resize-none border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500 min-h-[44px] max-h-[120px]"
             rows={1}
           />
           <Button
             onClick={handleSend}
             disabled={!input.trim() || isSending || isLoading}
-            className="flex-shrink-0"
+            className="flex-shrink-0 h-[44px]"
           >
             {isSending ? (
               <Loader2 className="w-4 h-4 animate-spin" />
