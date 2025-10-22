@@ -1,35 +1,49 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from pydantic import BaseModel
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-class MessageCreate(BaseModel):
+# ==================== CAMPAIGN MODELS ====================
+
+class CreateCampaignRequest(BaseModel):
+    title: str
+    initial_prompt: str
+
+class Campaign(BaseModel):
+    id: str
+    user_id: str
+    title: str
+    status: str
+    draft_json: Optional[Dict[str, Any]] = None
+    final_draft_json: Optional[Dict[str, Any]] = None
+    execution_started_at: Optional[str] = None
+    execution_completed_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+# ==================== CHAT MODELS ====================
+
+class ChatRequest(BaseModel):
     campaign_id: str
-    content: str
-    metadata: Optional[Dict[str, Any]] = None
+    message: str
 
 class MessageResponse(BaseModel):
     id: str
     campaign_id: str
     role: str
     content: str
+    created_at: str
     metadata: Optional[Dict[str, Any]] = None
-    created_at: datetime
-
-class ChatRequest(BaseModel):
-    campaign_id: str
-    content: str
 
 class ChatResponse(BaseModel):
-    user_message: MessageResponse
-    assistant_message: MessageResponse
-    draft_updated: bool
-    campaign_status: str
+    message: MessageResponse
+
+# ==================== EXECUTION MODELS ====================
 
 class ConfirmExecuteRequest(BaseModel):
     campaign_id: str
 
 class ConfirmExecuteResponse(BaseModel):
+    success: bool
+    message: str
     campaign_id: str
     status: str
-    message: str
-    execution_started_at: datetime

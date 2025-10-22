@@ -1,39 +1,27 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from config.settings import settings
-from routes import campaigns, chat
+from routes import campaigns, chat, canvas  # Add canvas
 
-app = FastAPI(
-    title="StratGen API",
-    description="AI-powered campaign strategy platform",
-    version="1.0.0"
-)
+app = FastAPI(title="StratGen API")
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL, "http://localhost:5173"],
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Register routers - campaigns and chat already have their own prefixes
+# Routes
 app.include_router(campaigns.router)
 app.include_router(chat.router)
+app.include_router(canvas.router)  # Add this line
 
 @app.get("/")
-async def root():
-    return {
-        "message": "StratGen API",
-        "version": "1.0.0",
-        "status": "running"
-    }
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
+def root():
+    return {"message": "StratGen API is running"}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

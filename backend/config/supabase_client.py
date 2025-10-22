@@ -2,11 +2,17 @@ from supabase import create_client, Client
 from config.settings import settings
 
 # Admin client - Full access (bypasses RLS)
-# Use this for system operations that need full database access
-supabase_admin: Client = create_client(
-    settings.SUPABASE_URL,
-    settings.SUPABASE_SERVICE_KEY
-)
+_supabase_admin: Client = None
+
+def get_admin_supabase_client() -> Client:
+    """Get or create admin Supabase client."""
+    global _supabase_admin
+    if _supabase_admin is None:
+        _supabase_admin = create_client(
+            settings.SUPABASE_URL,
+            settings.SUPABASE_SERVICE_KEY
+        )
+    return _supabase_admin
 
 def get_user_supabase_client(user_token: str) -> Client:
     """
@@ -28,13 +34,3 @@ def get_user_supabase_client(user_token: str) -> Client:
     client.postgrest.auth(user_token)
     
     return client
-
-def get_admin_supabase_client() -> Client:
-    """
-    Returns the admin Supabase client.
-    Use with caution - this bypasses all RLS policies.
-    
-    Returns:
-        Supabase admin client
-    """
-    return supabase_admin

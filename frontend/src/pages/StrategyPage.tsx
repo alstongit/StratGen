@@ -3,74 +3,15 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useRealtimeCampaign } from '../hooks/useRealtimeCampaign'
 import { ChatInterface } from '../components/Strategy/ChatInterface'
 import { DraftPreview } from '../components/Strategy/DraftPreview'
-import { ConfirmExecuteModal } from '../components/Strategy/ConfirmExecuteModal'
 import { Button } from '../components/ui/button'
-import { ArrowLeft, Rocket, Loader2, X, MessageSquare, FileText } from 'lucide-react'
-import api from '../lib/api'
+import { ArrowLeft, Loader2, X, MessageSquare, FileText } from 'lucide-react'
 
 export const StrategyPage = () => {
   const { campaignId } = useParams<{ campaignId: string }>()
   const navigate = useNavigate()
-  const { campaign, messages, loading, error, refetch } = useRealtimeCampaign(campaignId!)
+  const { campaign, loading, error } = useRealtimeCampaign(campaignId!)
   
-  const [isLoadingMessage, setIsLoadingMessage] = useState(false)
-  const [showConfirmModal, setShowConfirmModal] = useState(false)
-  const [apiError, setApiError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'chat' | 'draft'>('chat')
-
-  const handleSendMessage = async (content: string) => {
-    if (!campaignId) return
-
-    setIsLoadingMessage(true)
-    setApiError(null)
-
-    try {
-      console.log('📤 Sending message:', content)
-      
-      const response = await api.post('/chat/message', {
-        campaign_id: campaignId,
-        content,
-      })
-      
-      console.log('✅ Message sent successfully:', response.data)
-      
-      // Manually refetch to get the latest data
-      await refetch()
-      
-      // Switch to draft tab to show updates
-      if (response.data.draft_updated) {
-        setTimeout(() => setActiveTab('draft'), 500)
-      }
-      
-    } catch (error: any) {
-      console.error('❌ Error sending message:', error)
-      console.error('Error details:', error.response?.data)
-      setApiError(error.response?.data?.detail || 'Failed to send message')
-    } finally {
-      setIsLoadingMessage(false)
-    }
-  }
-
-  const handleConfirmExecute = async () => {
-    if (!campaignId) return
-
-    try {
-      setApiError(null)
-      await api.post('/chat/confirm-execute', {
-        campaign_id: campaignId,
-      })
-      
-      setShowConfirmModal(false)
-      
-      // Navigate to canvas page after short delay
-      setTimeout(() => {
-        navigate(`/canvas/${campaignId}`)
-      }, 1500)
-    } catch (error: any) {
-      console.error('Error executing campaign:', error)
-      setApiError(error.response?.data?.detail || 'Failed to execute campaign')
-    }
-  }
 
   if (loading) {
     return (
@@ -102,7 +43,6 @@ export const StrategyPage = () => {
     )
   }
 
-  const isDraftReady = campaign.status === 'draft_ready'
   const isExecuting = campaign.status === 'executing'
 
   return (
@@ -125,16 +65,6 @@ export const StrategyPage = () => {
             </div>
           </div>
 
-          {isDraftReady && !isExecuting && (
-            <Button
-              onClick={() => setShowConfirmModal(true)}
-              className="gap-2"
-            >
-              <Rocket className="w-4 h-4" />
-              Confirm & Execute
-            </Button>
-          )}
-
           {isExecuting && (
             <div className="flex items-center gap-2 text-blue-600">
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -142,12 +72,6 @@ export const StrategyPage = () => {
             </div>
           )}
         </div>
-
-        {apiError && (
-          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-red-800 text-sm">{apiError}</p>
-          </div>
-        )}
 
         {/* Mobile Tab Switcher */}
         <div className="mt-4 flex gap-2 md:hidden">
@@ -178,27 +102,16 @@ export const StrategyPage = () => {
 
       {/* Main Content - Responsive Split Screen */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Desktop: Both visible, Mobile: Tabs */}
+        {/* Chat - Left Side */}
         <div className={`w-full md:w-1/2 border-r ${activeTab === 'chat' ? 'block' : 'hidden md:block'}`}>
-          <ChatInterface
-            messages={messages}
-            onSendMessage={handleSendMessage}
-            isLoading={isLoadingMessage}
-          />
+          <ChatInterface campaign={campaign} />
         </div>
 
+        {/* Draft Preview - Right Side */}
         <div className={`w-full md:w-1/2 ${activeTab === 'draft' ? 'block' : 'hidden md:block'}`}>
           <DraftPreview campaign={campaign} />
         </div>
       </div>
-
-      {/* Confirm Execute Modal */}
-      <ConfirmExecuteModal
-        isOpen={showConfirmModal}
-        onClose={() => setShowConfirmModal(false)}
-        onConfirm={handleConfirmExecute}
-        campaignTitle={campaign.title}
-      />
     </div>
   )
 }

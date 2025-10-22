@@ -1,109 +1,65 @@
-import httpx
-from typing import Dict, Any, Optional
-import asyncio
-from datetime import datetime
-import os
+import aiohttp
+from typing import Dict, Any
+import urllib.parse
 
 class PollinationsService:
     """Service for generating images using Pollinations.ai"""
     
     def __init__(self):
+        # Use image.pollinations.ai directly (the actual image endpoint)
         self.base_url = "https://image.pollinations.ai/prompt"
-        
+        print("✅ PollinationsService initialized")
+    
     async def generate_image(
         self,
         prompt: str,
-        width: int = 1080,
-        height: int = 1080,
-        seed: Optional[int] = None
+        width: int = 1024,
+        height: int = 1024
     ) -> Dict[str, Any]:
         """
-        Generate image using Pollinations.ai
+        Generate an image using Pollinations.ai
         
         Args:
-            prompt: Text description of the image
-            width: Image width in pixels (default: 1080)
-            height: Image height in pixels (default: 1080)
-            seed: Random seed for reproducibility (optional)
-            
+            prompt: Text description of the image (keep it short!)
+            width: Image width (default 1024)
+            height: Image height (default 1024)
+        
         Returns:
-            Dict with image URL and metadata
+            Dict with image_url
         """
         try:
-            # Build Pollinations URL
-            # Format: https://image.pollinations.ai/prompt/{prompt}?width={w}&height={h}&seed={s}
-            encoded_prompt = prompt.replace(" ", "%20")
-            url = f"{self.base_url}/{encoded_prompt}"
+            # Clean and shorten prompt - Pollinations works best with short prompts
+            clean_prompt = prompt.strip()
             
-            params = {
+            # Remove any special formatting
+            clean_prompt = clean_prompt.replace("**", "").replace("*", "")
+            clean_prompt = clean_prompt.replace("\n", " ").replace("\r", " ")
+            
+            # Limit to 100 characters for best results
+            if len(clean_prompt) > 100:
+                clean_prompt = clean_prompt[:97] + "..."
+            
+            # URL encode the prompt
+            encoded_prompt = urllib.parse.quote(clean_prompt)
+            
+            # Build clean URL: image.pollinations.ai/prompt/<prompt>
+            image_url = f"{self.base_url}/{encoded_prompt}"
+            
+            print(f"🎨 Generated Pollinations URL: {image_url}")
+            
+            # Return the URL - Pollinations generates on-demand
+            return {
+                "image_url": image_url,
+                "prompt": clean_prompt,
                 "width": width,
                 "height": height
-            }
-            
-            if seed:
-                params["seed"] = seed
-            
-            # Build full URL with params
-            param_str = "&".join([f"{k}={v}" for k, v in params.items()])
-            full_url = f"{url}?{param_str}"
-            
-            print(f"🎨 Generating image with Pollinations.ai...")
-            print(f"   Prompt: {prompt[:100]}...")
-            
-            # Pollinations.ai returns the image directly
-            # We just need to verify it's accessible
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.head(full_url)
-                response.raise_for_status()
-            
-            print(f"✅ Image generated successfully")
-            
-            return {
-                "url": full_url,
-                "prompt": prompt,
-                "width": width,
-                "height": height,
-                "seed": seed,
-                "generated_at": datetime.utcnow().isoformat()
             }
         
         except Exception as e:
             print(f"❌ Error generating image: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-    
-    async def download_image(
-        self,
-        image_url: str
-    ) -> bytes:
-        """
-        Download image from Pollinations.ai
-        
-        Args:
-            image_url: Full Pollinations.ai image URL
-            
-        Returns:
-            Image bytes
-        """
-        try:
-            print(f"⬇️ Downloading image from Pollinations.ai...")
-            
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.get(image_url)
-                response.raise_for_status()
-                
-                image_bytes = response.content
-                
-            print(f"✅ Image downloaded ({len(image_bytes)} bytes)")
-            
-            return image_bytes
-        
-        except Exception as e:
-            print(f"❌ Error downloading image: {e}")
             raise
 
-# Create global instance
+# Global instance
 _pollinations_service = None
 
 def get_pollinations_service() -> PollinationsService:

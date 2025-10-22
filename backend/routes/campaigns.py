@@ -4,212 +4,222 @@ from datetime import datetime
 
 from middleware.auth_middleware import get_current_user
 from config.supabase_client import get_admin_supabase_client
-from services.supabase_service import SupabaseService
+from models.message import CreateCampaignRequest, Campaign, MessageResponse
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
-@router.get("")
-async def get_campaigns(
-    current_user: Dict[str, Any] = Depends(get_current_user)
-) -> List[Dict[str, Any]]:
-    """Get all campaigns for the authenticated user."""
-    try:
-        user_id = current_user["user_id"]
-        supabase = get_admin_supabase_client()
-        
-        response = supabase.table("campaigns").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
-        
-        return response.data or []
-    
-    except Exception as e:
-        print(f"Error fetching campaigns: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch campaigns: {str(e)}"
-        )
-
-@router.post("")
+@router.post("", response_model=Campaign)
 async def create_campaign(
-    campaign_data: Dict[str, Any],
+    request: CreateCampaignRequest,
     current_user: Dict[str, Any] = Depends(get_current_user)
-) -> Dict[str, Any]:
-    """Create a new campaign."""
+):
+    """Create a new campaign"""
     try:
-        user_id = current_user["user_id"]
+        print(f"🔍 Creating campaign for user: {current_user}")
+        
         supabase = get_admin_supabase_client()
         
-        new_campaign = {
-            "user_id": user_id,
-            "title": campaign_data.get("title", "Untitled Campaign"),
-            "initial_prompt": campaign_data.get("initial_prompt", ""),
+        # Create campaign
+        campaign_data = {
+            "user_id": current_user["sub"],
+            "title": request.title,
+            "initial_prompt": request.initial_prompt or "",  # Allow empty
             "status": "drafting",
+            "draft_json": {},
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat()
         }
         
-        response = supabase.table("campaigns").insert(new_campaign).execute()
+        print(f"📝 Inserting campaign data: {campaign_data}")
         
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create campaign"
-            )
+        result = supabase.table("campaigns").insert(campaign_data).execute()
+        campaign = result.data[0]
         
-        return response.data[0]
+        print(f"✅ Campaign created: {campaign['id']}")
+        
+        # Only create initial message if initial_prompt is not empty
+        if request.initial_prompt and request.initial_prompt.strip():
+            initial_message = {
+                "campaign_id": campaign["id"],
+                "role": "user",
+                "content": request.initial_prompt,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            
+            supabase.table("chat_messages").insert(initial_message).execute()
+            print(f"✅ Initial message created")
+        
+        return campaign
     
-    except HTTPException:
-        raise
     except Exception as e:
-        print(f"Error creating campaign: {e}")
+        print(f"❌ Error creating campaign: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create campaign: {str(e)}"
         )
 
-@router.get("/{campaign_id}")
+@router.get("", response_model=List[Campaign])
+async def get_campaigns(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get all campaigns for current user"""
+    try:
+        print(f"🔍 Fetching campaigns for user: {current_user}")
+        
+        supabase = get_admin_supabase_client()
+        
+        result = supabase.table("campaigns").select("*").eq(
+            "user_id", current_user["sub"]
+        ).order("created_at", desc=True).execute()
+        
+        print(f"📊 Found {len(result.data)} campaigns")
+        
+        return result.data
+    
+    except Exception as e:
+        print(f"❌ Error fetching campaigns: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch campaigns: {str(e)}"
+        )
+
+@router.get("/{campaign_id}", response_model=Campaign)
 async def get_campaign(
     campaign_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user)
-) -> Dict[str, Any]:
-    """Get a specific campaign by ID."""
+):
+    """Get single campaign by ID"""
     try:
-        user_id = current_user["user_id"]
+        print(f"🔍 Getting campaign {campaign_id} for user: {current_user}")
+        
         supabase = get_admin_supabase_client()
-        service = SupabaseService(supabase)
         
-        campaign = service.get_campaign(campaign_id)
+        # First, check if campaign exists at all
+        all_campaigns = supabase.table("campaigns").select("id, user_id").eq(
+            "id", campaign_id
+        ).execute()
         
-        if not campaign:
+        print(f"📊 Campaign query result: {all_campaigns.data}")
+        
+        if not all_campaigns.data:
+            print(f"❌ Campaign {campaign_id} does not exist in database")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Campaign not found"
             )
         
-        if campaign["user_id"] != user_id:
+        campaign_data = all_campaigns.data[0]
+        print(f"🔍 Campaign user_id: {campaign_data['user_id']}")
+        print(f"🔍 Current user sub: {current_user['sub']}")
+        
+        if campaign_data['user_id'] != current_user['sub']:
+            print(f"❌ User mismatch! Campaign belongs to {campaign_data['user_id']}, but request from {current_user['sub']}")
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this campaign"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Campaign not found"
             )
         
-        return campaign
+        # Now get full campaign data
+        result = supabase.table("campaigns").select("*").eq(
+            "id", campaign_id
+        ).eq("user_id", current_user["sub"]).execute()
+        
+        print(f"✅ Campaign found: {result.data[0]['title']}")
+        
+        return result.data[0]
     
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error fetching campaign: {e}")
+        print(f"❌ Error getting campaign: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch campaign: {str(e)}"
+            detail=f"Failed to get campaign: {str(e)}"
         )
 
-@router.get("/{campaign_id}/messages")
+@router.get("/{campaign_id}/messages", response_model=List[MessageResponse])
 async def get_campaign_messages(
     campaign_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user)
-) -> List[Dict[str, Any]]:
-    """Get all messages for a campaign."""
+):
+    """Get all messages for a campaign"""
     try:
-        user_id = current_user["user_id"]
+        print(f"🔍 Getting messages for campaign {campaign_id}")
+        
         supabase = get_admin_supabase_client()
-        service = SupabaseService(supabase)
         
         # Verify campaign ownership
-        campaign = service.get_campaign(campaign_id)
-        if not campaign:
+        campaign_result = supabase.table("campaigns").select("id").eq(
+            "id", campaign_id
+        ).eq("user_id", current_user["sub"]).execute()
+        
+        if not campaign_result.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Campaign not found"
-            )
-        
-        if campaign["user_id"] != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this campaign"
             )
         
         # Get messages
-        messages = service.get_campaign_messages(campaign_id)
-        return messages
+        messages_result = supabase.table("chat_messages").select("*").eq(
+            "campaign_id", campaign_id
+        ).order("created_at", desc=False).execute()
+        
+        print(f"📊 Found {len(messages_result.data)} messages")
+        
+        return messages_result.data
     
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error fetching messages: {e}")
+        print(f"❌ Error getting messages: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch messages: {str(e)}"
-        )
-
-@router.patch("/{campaign_id}")
-async def update_campaign(
-    campaign_id: str,
-    updates: Dict[str, Any],
-    current_user: Dict[str, Any] = Depends(get_current_user)
-) -> Dict[str, Any]:
-    """Update a campaign."""
-    try:
-        user_id = current_user["user_id"]
-        supabase = get_admin_supabase_client()
-        service = SupabaseService(supabase)
-        
-        campaign = service.get_campaign(campaign_id)
-        if not campaign:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Campaign not found"
-            )
-        
-        if campaign["user_id"] != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to modify this campaign"
-            )
-        
-        updated_campaign = service.update_campaign(campaign_id, updates)
-        
-        return updated_campaign
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error updating campaign: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update campaign: {str(e)}"
+            detail=f"Failed to get messages: {str(e)}"
         )
 
 @router.delete("/{campaign_id}")
 async def delete_campaign(
     campaign_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user)
-) -> Dict[str, str]:
-    """Delete a campaign."""
+):
+    """Delete a campaign"""
     try:
-        user_id = current_user["user_id"]
+        print(f"🔍 Deleting campaign {campaign_id} for user: {current_user}")
+        
         supabase = get_admin_supabase_client()
         
-        campaign_response = supabase.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+        # Verify ownership
+        result = supabase.table("campaigns").select("id").eq(
+            "id", campaign_id
+        ).eq("user_id", current_user["sub"]).execute()
         
-        if not campaign_response.data:
+        if not result.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Campaign not found"
             )
         
-        if campaign_response.data["user_id"] != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to delete this campaign"
-            )
-        
+        # Delete campaign
         supabase.table("campaigns").delete().eq("id", campaign_id).execute()
+        
+        print(f"✅ Campaign deleted: {campaign_id}")
         
         return {"message": "Campaign deleted successfully"}
     
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error deleting campaign: {e}")
+        print(f"❌ Error deleting campaign: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete campaign: {str(e)}"

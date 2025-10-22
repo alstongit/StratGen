@@ -1,12 +1,14 @@
 from typing import Dict, Any, List, Optional
 from supabase import Client
 from datetime import datetime
+from config.supabase_client import get_admin_supabase_client
 
 class SupabaseService:
     """Helper service for common Supabase operations."""
     
-    def __init__(self, supabase_client: Client):
-        self.supabase = supabase_client
+    def __init__(self, supabase_client: Optional[Client] = None):
+        # If no client provided, use admin client
+        self.supabase = supabase_client or get_admin_supabase_client()
     
     # ==================== CAMPAIGNS ====================
     
@@ -40,7 +42,7 @@ class SupabaseService:
             print(f"Error getting messages: {e}")
             return []
     
-    def create_message(
+    async def create_message(
         self,
         campaign_id: str,
         role: str,
@@ -89,7 +91,8 @@ class SupabaseService:
                 "day_number": day_number,
                 "content": content or {},
                 "status": status,
-                "created_at": datetime.utcnow().isoformat()
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
             }
             response = self.supabase.table("campaign_assets").insert(asset_data).execute()
             return response.data[0] if response.data else None
@@ -106,3 +109,13 @@ class SupabaseService:
         except Exception as e:
             print(f"Error updating asset: {e}")
             raise
+
+# Global singleton instance
+_supabase_service = None
+
+def get_supabase_service() -> SupabaseService:
+    """Get or create SupabaseService singleton instance."""
+    global _supabase_service
+    if _supabase_service is None:
+        _supabase_service = SupabaseService()
+    return _supabase_service

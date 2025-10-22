@@ -6,8 +6,8 @@ from typing import Optional, Dict, Any
 # Configure Gemini
 genai.configure(api_key=settings.GOOGLE_API_KEY)
 
-# Initialize model
-model = genai.GenerativeModel('gemini-2.5-flash-lite')
+# Initialize model - THIS is what should be exported as gemini_client
+gemini_client = genai.GenerativeModel('gemini-2.0-flash-lite')
 
 async def generate_text(
     prompt: str,
@@ -38,7 +38,7 @@ async def generate_text(
         if system_instruction:
             full_prompt = f"{system_instruction}\n\n{prompt}"
         
-        response = model.generate_content(
+        response = gemini_client.generate_content(
             full_prompt,
             generation_config=generation_config
         )

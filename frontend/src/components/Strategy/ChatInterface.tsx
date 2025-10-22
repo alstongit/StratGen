@@ -1,150 +1,260 @@
-import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2 } from 'lucide-react'
-import type { ChatMessage } from '../../types'
-import { MessageBubble } from './MessageBubble'
-import { Button } from '../ui/button'
+import { useState, useEffect, useRef } from 'react';
+import type { Campaign, Message } from '@/types';
+import { chatAPI, campaignsAPI } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { Send, Loader2, Sparkles } from 'lucide-react';
+import { ConfirmExecuteModal } from './ConfirmExecuteModal';
+import { useNavigate } from 'react-router-dom';
 
 interface ChatInterfaceProps {
-  messages: ChatMessage[]
-  onSendMessage: (content: string) => Promise<void>
-  isLoading: boolean
+  campaign: Campaign;
 }
 
-export const ChatInterface = ({ messages, onSendMessage, isLoading }: ChatInterfaceProps) => {
-  const [input, setInput] = useState('')
-  const [isSending, setIsSending] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const messagesContainerRef = useRef<HTMLDivElement>(null)
+export function ChatInterface({ campaign }: ChatInterfaceProps) {
+  const navigate = useNavigate();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [loadingMessages, setLoadingMessages] = useState(true);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Load messages on mount
   useEffect(() => {
-    if (messagesContainerRef.current) {
-      const container = messagesContainerRef.current
-      const isScrolledToBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 100
-      
-      // Only auto-scroll if user is already near the bottom
-      if (isScrolledToBottom) {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-      }
-    }
-  }, [messages])
+    loadMessages();
+  }, [campaign.id]);
 
-  // Auto-resize textarea
+  // Subscribe to new messages
   useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`
+    console.log(`🔔 Subscribing to messages for campaign ${campaign.id}`);
+    
+    const channel = supabase
+      .channel(`messages:${campaign.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'chat_messages',
+          filter: `campaign_id=eq.${campaign.id}`,
+        },
+        (payload) => {
+          console.log('🔔 New message received:', payload);
+          const newMessage = payload.new as Message;
+          
+          setMessages((prev) => {
+            // Avoid duplicates
+            if (prev.find(m => m.id === newMessage.id)) {
+              return prev;
+            }
+            return [...prev, newMessage];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      console.log(`🔕 Unsubscribing from messages for campaign ${campaign.id}`);
+      supabase.removeChannel(channel);
+    };
+  }, [campaign.id]);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const loadMessages = async () => {
+    try {
+      setLoadingMessages(true);
+      const msgs = await campaignsAPI.getCampaignMessages(campaign.id);
+      console.log(`📚 Loaded ${msgs.length} messages`);
+      setMessages(msgs);
+    } catch (error) {
+      console.error('Failed to load messages:', error);
+    } finally {
+      setLoadingMessages(false);
     }
-  }, [input])
+  };
 
   const handleSend = async () => {
-    if (!input.trim() || isSending) return
+    if (!input.trim() || loading) return;
 
-    const messageContent = input.trim()
-    setInput('')
-    setIsSending(true)
+    const userMessage = input.trim();
+    setInput('');
+    setLoading(true);
 
     try {
-      await onSendMessage(messageContent)
+      console.log('📤 Sending message:', userMessage);
+      
+      // The backend will save both user and AI messages to DB
+      // Realtime will pick them up and add them to the UI
+      await chatAPI.sendMessage(campaign.id, userMessage);
+      
+      console.log('✅ Message sent successfully');
     } catch (error) {
-      console.error('Error sending message:', error)
-      // Restore input on error
-      setInput(messageContent)
+      console.error('Failed to send message:', error);
+      alert('Failed to send message. Please try again.');
+      setInput(userMessage); // Restore message on error
     } finally {
-      setIsSending(false)
+      setLoading(false);
     }
-  }
+  };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
+      e.preventDefault();
+      handleSend();
     }
+  };
+
+  const handleConfirmExecute = async () => {
+    try {
+      setLoading(true);
+      await chatAPI.confirmExecute(campaign.id);
+      setShowConfirmModal(false);
+      
+      // Navigate to canvas after a brief delay
+      setTimeout(() => {
+        navigate(`/canvas/${campaign.id}`);
+      }, 1000);
+    } catch (error) {
+      console.error('Failed to execute campaign:', error);
+      alert('Failed to start execution. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const canExecute = campaign.status === 'draft_ready' && campaign.draft_json && Object.keys(campaign.draft_json).length > 0;
+
+  if (loadingMessages) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
   }
 
   return (
-    <div className="flex flex-col h-full bg-white">
-      {/* Messages */}
-      <div 
-        ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto px-6 py-4 space-y-4"
-      >
-        {messages.length === 0 && !isLoading && (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center max-w-md">
-              <div className="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4">
-                <Send className="w-8 h-8 text-indigo-600" />
+    <>
+      <div className="flex flex-col h-full bg-white">
+        {/* Messages Area */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-center px-4">
+              <div className="bg-blue-50 rounded-full p-4 mb-4">
+                <Sparkles className="w-12 h-12 text-blue-600" />
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                Start Your Campaign
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                Let's Create Your Campaign Strategy
               </h3>
-              <p className="text-gray-600 text-sm">
-                Tell me about your campaign - the event, product, or service you want to promote.
-                I'll help you create a complete marketing strategy.
+              <p className="text-gray-600 max-w-md mb-6">
+                Tell me about your campaign! What are you trying to achieve? Who's your target audience? 
+                I'll help you build a complete marketing strategy.
               </p>
-              <div className="mt-6 text-left bg-white border rounded-lg p-4">
-                <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Example:</p>
-                <p className="text-sm text-gray-700">
-                  "I'm organizing a Counter Strike LAN event in Mumbai for 4 days. 
-                  Need a social media campaign targeting gamers aged 18-30."
-                </p>
+              <div className="bg-gray-50 rounded-lg p-4 text-left max-w-md">
+                <p className="text-sm text-gray-700 mb-2 font-medium">Example prompts:</p>
+                <ul className="text-sm text-gray-600 space-y-1">
+                  <li>• "I want to launch a new fitness app for millennials"</li>
+                  <li>• "Creating a campaign for our eco-friendly products"</li>
+                  <li>• "Need to promote a tech conference in Mumbai"</li>
+                </ul>
               </div>
             </div>
-          </div>
-        )}
-
-        {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
-        ))}
-
-        {isLoading && (
-          <div className="flex gap-3">
-            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">
-              <Loader2 className="w-5 h-5 text-gray-600 animate-spin" />
-            </div>
-            <div className="bg-gray-100 rounded-2xl px-4 py-3">
-              <div className="flex gap-1">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input */}
-      <div className="border-t px-6 py-4 bg-gray-50">
-        <div className="flex gap-3 items-end">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyPress}
-            placeholder="Describe your campaign or request changes..."
-            disabled={isSending || isLoading}
-            className="flex-1 resize-none border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500 min-h-[44px] max-h-[120px]"
-            rows={1}
-          />
-          <Button
-            onClick={handleSend}
-            disabled={!input.trim() || isSending || isLoading}
-            className="flex-shrink-0 h-[44px]"
-          >
-            {isSending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Send className="w-4 h-4" />
-            )}
-          </Button>
+          ) : (
+            <>
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded-lg px-4 py-3 ${
+                      message.role === 'user'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-900'
+                    }`}
+                  >
+                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    <p className="text-xs opacity-70 mt-2">
+                      {new Date(message.created_at).toLocaleTimeString()}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              
+              {loading && (
+                <div className="flex justify-start">
+                  <div className="bg-gray-100 rounded-lg px-4 py-3">
+                    <Loader2 className="w-5 h-5 animate-spin text-gray-600" />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          
+          <div ref={messagesEndRef} />
         </div>
-        <p className="text-xs text-gray-500 mt-2">
-          Press Enter to send, Shift+Enter for new line
-        </p>
+
+        {/* Action Button - Show when draft is ready */}
+        {canExecute && (
+          <div className="border-t bg-green-50 px-6 py-3">
+            <Button
+              onClick={() => setShowConfirmModal(true)}
+              className="w-full gap-2 bg-green-600 hover:bg-green-700"
+              size="lg"
+            >
+              <Sparkles className="w-5 h-5" />
+              Confirm & Execute Campaign
+            </Button>
+          </div>
+        )}
+
+        {/* Input Area */}
+        <div className="border-t p-4 bg-gray-50">
+          <div className="flex gap-2">
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyPress={handleKeyPress}
+              placeholder={
+                messages.length === 0
+                  ? "Describe your campaign goals, target audience, timeline..."
+                  : "Continue the conversation or refine your strategy..."
+              }
+              className="flex-1 min-h-[80px] resize-none"
+              disabled={loading}
+            />
+            <Button
+              onClick={handleSend}
+              disabled={!input.trim() || loading}
+              size="icon"
+              className="h-[80px] w-[80px]"
+            >
+              {loading ? (
+                <Loader2 className="w-6 h-6 animate-spin" />
+              ) : (
+                <Send className="w-6 h-6" />
+              )}
+            </Button>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Press Enter to send, Shift+Enter for new line
+          </p>
+        </div>
       </div>
-    </div>
-  )
+
+      {/* Confirm Execute Modal */}
+      <ConfirmExecuteModal
+        open={showConfirmModal}
+        onClose={() => setShowConfirmModal(false)}
+        onConfirm={handleConfirmExecute}
+        campaign={campaign}
+      />
+    </>
+  );
 }

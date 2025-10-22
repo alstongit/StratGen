@@ -69,12 +69,12 @@ class DraftAgent:
         try:
             # Create Gemini model instances
             strategy_model = Gemini(
-                id="gemini-2.0-flash-lite",
+                id="gemini-2.0-flash-exp",
                 api_key=os.getenv("GOOGLE_API_KEY")
             )
             
             conversation_model = Gemini(
-                id="gemini-2.0-flash-lite",
+                id="gemini-2.0-flash-exp",
                 api_key=os.getenv("GOOGLE_API_KEY")
             )
             
@@ -244,7 +244,7 @@ IMPORTANT: Return ONLY the complete updated JSON object. No explanations."""
             draft: The current/updated draft
             user_message: User's latest message
             conversation_history: Previous messages (for context)
-            campaign_id: Campaign ID
+            campaign_id: Campaign ID (used as session ID for Agno's memory)
         
         Returns:
             Natural language response
@@ -275,7 +275,7 @@ Your task:
 
 Keep it conversational, friendly, and concise (2-3 short paragraphs)."""
 
-            response = self.conversation_agent.run(prompt, stream=False)
+            response = self.conversation_agent.run(prompt, stream=False, session_id=campaign_id)
             response_text = response.content if hasattr(response, 'content') else str(response)
             conversational_response = response_text.strip()
             

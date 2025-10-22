@@ -1,124 +1,130 @@
-import { useState } from 'react'
-import { X, Rocket, AlertCircle } from 'lucide-react'
-import { Button } from '../ui/button'
+import type { Campaign } from '@/types'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Sparkles, CheckCircle, Clock, Target } from 'lucide-react'
 
 interface ConfirmExecuteModalProps {
-  isOpen: boolean
+  open: boolean // Changed from isOpen to open
   onClose: () => void
-  onConfirm: () => Promise<void>
-  campaignTitle: string
+  onConfirm: () => void
+  campaign: Campaign
 }
 
-export const ConfirmExecuteModal = ({
-  isOpen,
+export function ConfirmExecuteModal({
+  open,
   onClose,
   onConfirm,
-  campaignTitle,
-}: ConfirmExecuteModalProps) => {
-  const [isExecuting, setIsExecuting] = useState(false)
+  campaign,
+}: ConfirmExecuteModalProps) {
+  const draftJson = campaign.draft_json || {}
 
-  if (!isOpen) return null
-
-  const handleConfirm = async () => {
-    setIsExecuting(true)
-    try {
-      await onConfirm()
-    } catch (error) {
-      console.error('Error executing campaign:', error)
-    } finally {
-      setIsExecuting(false)
-    }
-  }
+  // Extract key info from draft
+  const brandName = draftJson.brand_name || 'Your brand'
+  const duration = draftJson.duration || 'N/A'
+  const postingSchedule = draftJson.posting_schedule || {}
+  const numPosts = Object.keys(postingSchedule).length || 0
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center">
-              <Rocket className="w-6 h-6 text-indigo-600" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900">Execute Campaign</h3>
-              <p className="text-sm text-gray-600">{campaignTitle}</p>
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-[500px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-xl">
+            <Sparkles className="w-6 h-6 text-blue-600" />
+            Ready to Generate Assets?
+          </DialogTitle>
+          <DialogDescription className="text-base pt-2">
+            I'll now generate all campaign assets based on your approved strategy.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-4">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <h4 className="font-semibold text-blue-900 mb-3 flex items-center gap-2">
+              <CheckCircle className="w-5 h-5" />
+              What will be generated:
+            </h4>
+            <ul className="space-y-2 text-sm text-blue-800">
+              <li className="flex items-start gap-2">
+                <span className="text-blue-600 mt-0.5">•</span>
+                <span>
+                  <strong>{numPosts || 'Multiple'} social media posts</strong> with
+                  copy optimized for engagement
+                </span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-blue-600 mt-0.5">•</span>
+                <span>
+                  <strong>{numPosts || 'Custom'} images</strong> matching your
+                  brand's visual style
+                </span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-blue-600 mt-0.5">•</span>
+                <span>
+                  <strong>10 relevant influencers</strong> for potential
+                  partnerships
+                </span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-blue-600 mt-0.5">•</span>
+                <span>
+                  <strong>Execution plan</strong> with timeline and checklist
+                </span>
+              </li>
+            </ul>
+          </div>
+
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+            <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
+              <Target className="w-5 h-5" />
+              Campaign Summary:
+            </h4>
+            <div className="space-y-1 text-sm text-gray-700">
+              <p>
+                <strong>Brand:</strong> {brandName}
+              </p>
+              <p>
+                <strong>Duration:</strong> {duration}
+              </p>
+              {numPosts > 0 && (
+                <p>
+                  <strong>Posts:</strong> {numPosts} posts scheduled
+                </p>
+              )}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            disabled={isExecuting}
-            className="text-gray-400 hover:text-gray-600 disabled:opacity-50"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
 
-        {/* Content */}
-        <div className="mb-6">
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
-            <div className="flex gap-3">
-              <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-medium text-amber-900 mb-1">
-                  This will start generating your campaign assets
-                </p>
-                <p className="text-xs text-amber-700">
-                  The AI will create images, copy, influencer recommendations, and execution plans 
-                  based on your strategy. This process may take a few minutes.
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <div className="flex items-start gap-2">
+              <Clock className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
+              <div className="text-sm text-amber-800">
+                <p className="font-semibold mb-1">Estimated time: 2-3 minutes</p>
+                <p>
+                  You'll see real-time progress updates. Once complete, you'll be
+                  redirected to the canvas to view all assets.
                 </p>
               </div>
             </div>
           </div>
-
-          <div className="space-y-2 text-sm text-gray-700">
-            <p className="flex items-start gap-2">
-              <span className="text-indigo-600 font-semibold">✓</span>
-              <span>Generate images for each day</span>
-            </p>
-            <p className="flex items-start gap-2">
-              <span className="text-indigo-600 font-semibold">✓</span>
-              <span>Create captions and headlines</span>
-            </p>
-            <p className="flex items-start gap-2">
-              <span className="text-indigo-600 font-semibold">✓</span>
-              <span>Find relevant influencers</span>
-            </p>
-            <p className="flex items-start gap-2">
-              <span className="text-indigo-600 font-semibold">✓</span>
-              <span>Build execution plan</span>
-            </p>
-          </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex gap-3">
-          <Button
-            variant="outline"
-            onClick={onClose}
-            disabled={isExecuting}
-            className="flex-1"
-          >
-            Cancel
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose}>
+            Go Back
           </Button>
-          <Button
-            onClick={handleConfirm}
-            disabled={isExecuting}
-            className="flex-1"
-          >
-            {isExecuting ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                Executing...
-              </>
-            ) : (
-              <>
-                <Rocket className="w-4 h-4 mr-2" />
-                Confirm & Execute
-              </>
-            )}
+          <Button onClick={onConfirm} className="gap-2">
+            <Sparkles className="w-4 h-4" />
+            Start Generation
           </Button>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

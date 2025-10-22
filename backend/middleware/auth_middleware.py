@@ -1,8 +1,7 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import jwt, JWTError
 from typing import Dict, Any
-from config.settings import settings
+from config.supabase_client import get_admin_supabase_client
 
 security = HTTPBearer()
 
@@ -10,55 +9,46 @@ async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> Dict[str, Any]:
     """
-    Validates JWT token and returns user information.
-    This is used as a dependency in route handlers.
-    
-    Args:
-        credentials: HTTP Bearer credentials from request header
-    
-    Returns:
-        Dictionary containing user_id, email, role, and token
-    
-    Raises:
-        HTTPException: If token is invalid or expired
+    Verify JWT token and return user data.
     """
-    token = credentials.credentials
-    
     try:
-        # Decode and validate JWT using Supabase's JWT secret
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET,
-            algorithms=["HS256"],
-            audience="authenticated"
-        )
+        token = credentials.credentials
         
-        user_id: str = payload.get("sub")
-        if user_id is None:
+        # Get Supabase client
+        supabase = get_admin_supabase_client()
+        
+        # Verify token and get user
+        user_response = supabase.auth.get_user(token)
+        
+        # Check if user exists
+        if not user_response or not user_response.user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
-                headers={"WWW-Authenticate": "Bearer"},
+                detail="Invalid authentication token"
             )
         
-        return {
-            "user_id": user_id,
-            "email": payload.get("email"),
-            "role": payload.get("role"),
-            "token": token  # Pass along for Supabase client
-        }
+        user = user_response.user
         
-    except JWTError as e:
-        print(f"JWT validation error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        # Extract user ID - Supabase returns it as user.id
+        user_id = user.id
+        user_email = user.email if hasattr(user, 'email') else None
+        
+        print(f"✅ User authenticated: {user_email} (ID: {user_id})")
+        
+        # Return standardized format with 'sub' field
+        return {
+            "sub": user_id,
+            "id": user_id,
+            "email": user_email
+        }
+    
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Unexpected error in auth middleware: {e}")
+        print(f"❌ Auth error: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication failed",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Could not validate credentials"
         )

@@ -27,13 +27,13 @@ async def send_message(
     Uses Agno AI for intelligent strategy generation.
     """
     try:
-        user_id = current_user["user_id"]
+        user_id = current_user["sub"]
         campaign_id = request.campaign_id
         
         print(f"\n🔵 === NEW MESSAGE REQUEST (Agno AI) ===")
         print(f"User ID: {user_id}")
         print(f"Campaign ID: {campaign_id}")
-        print(f"Content: {request.content[:100]}...")
+        print(f"Content: {request.message[:100]}...")
         
         # Initialize Supabase service with admin client
         supabase = get_admin_supabase_client()
@@ -41,35 +41,39 @@ async def send_message(
         
         # 1. Verify campaign belongs to user
         print(f"🔍 Verifying campaign ownership...")
-        campaign = service.get_campaign(campaign_id)
-        if not campaign:
+        campaign_result = supabase.table("campaigns").select("*").eq(
+            "id", campaign_id
+        ).eq("user_id", user_id).execute()
+        
+        if not campaign_result.data:
             print(f"❌ Campaign not found: {campaign_id}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Campaign not found"
             )
         
-        if campaign["user_id"] != user_id:
-            print(f"❌ Unauthorized access attempt")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this campaign"
-            )
-        
+        campaign = campaign_result.data[0]
         print(f"✅ Campaign verified")
         
         # 2. Save user message
         print(f"💾 Saving user message...")
-        user_message = service.create_message(
-            campaign_id=campaign_id,
-            role="user",
-            content=request.content
-        )
+        user_message_data = {
+            "campaign_id": campaign_id,
+            "role": "user",
+            "content": request.message,
+            "created_at": datetime.utcnow().isoformat()
+        }
+        user_msg_result = supabase.table("chat_messages").insert(user_message_data).execute()
+        user_message = user_msg_result.data[0]
         print(f"✅ User message saved: {user_message['id']}")
         
         # 3. Get conversation history
         print(f"📜 Fetching conversation history...")
-        messages = service.get_campaign_messages(campaign_id)
+        messages_result = supabase.table("chat_messages").select("*").eq(
+            "campaign_id", campaign_id
+        ).order("created_at", desc=False).execute()
+        
+        messages = messages_result.data
         conversation_history = [
             {"role": msg["role"], "content": msg["content"]}
             for msg in messages[:-1]  # Exclude the message we just added
@@ -78,14 +82,14 @@ async def send_message(
         
         # 4. Generate or refine draft using Agno AI
         current_draft = campaign.get("draft_json")
-        is_first_message = current_draft is None
+        is_first_message = not current_draft or len(current_draft) == 0
         
         print(f"🤖 Using Agno AI (first_message: {is_first_message})...")
         
         if is_first_message:
             # Generate initial draft with Agno
             draft_json = await draft_agent.generate_initial_draft(
-                initial_prompt=request.content,
+                initial_prompt=request.message,
                 user_id=user_id
             )
             draft_updated = True
@@ -94,7 +98,7 @@ async def send_message(
             # Refine existing draft with Agno
             draft_json = await draft_agent.refine_draft(
                 current_draft=current_draft,
-                user_message=request.content,
+                user_message=request.message,
                 conversation_history=conversation_history
             )
             draft_updated = True
@@ -104,7 +108,7 @@ async def send_message(
         print(f"💬 Generating conversational response with Agno...")
         assistant_content = await draft_agent.generate_conversational_response(
             draft=draft_json,
-            user_message=request.content,
+            user_message=request.message,
             conversation_history=conversation_history,
             campaign_id=campaign_id  # Session ID for Agno's memory
         )
@@ -114,34 +118,32 @@ async def send_message(
         new_status = "draft_ready" if draft_json else "drafting"
         
         print(f"💾 Updating campaign status to: {new_status}")
-        updated_campaign = service.update_campaign(
-            campaign_id=campaign_id,
-            updates={
-                "draft_json": draft_json,
-                "status": new_status,
-                "title": draft_json.get("title", campaign["title"])
-            }
-        )
+        supabase.table("campaigns").update({
+            "draft_json": draft_json,
+            "status": new_status,
+            "title": draft_json.get("title", campaign["title"]),
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", campaign_id).execute()
         print(f"✅ Campaign updated")
         
         # 7. Save assistant message
         print(f"💾 Saving assistant message...")
-        assistant_message = service.create_message(
-            campaign_id=campaign_id,
-            role="assistant",
-            content=assistant_content,
-            metadata={"draft_snapshot": draft_json}
-        )
+        assistant_message_data = {
+            "campaign_id": campaign_id,
+            "role": "assistant",
+            "content": assistant_content,
+            "metadata": {"draft_snapshot": draft_json},
+            "created_at": datetime.utcnow().isoformat()
+        }
+        asst_msg_result = supabase.table("chat_messages").insert(assistant_message_data).execute()
+        assistant_message = asst_msg_result.data[0]
         print(f"✅ Assistant message saved: {assistant_message['id']}")
         
         # 8. Return response
         print(f"✅ === MESSAGE PROCESSING COMPLETE (Agno AI) ===\n")
         
         return ChatResponse(
-            user_message=MessageResponse(**user_message),
-            assistant_message=MessageResponse(**assistant_message),
-            draft_updated=draft_updated,
-            campaign_status=new_status
+            message=MessageResponse(**assistant_message)
         )
     
     except HTTPException:
@@ -167,7 +169,6 @@ async def confirm_execute(
     """
     try:
         supabase = get_admin_supabase_client()
-        supabase_service = SupabaseService()
         
         # Get campaign
         result = supabase.table("campaigns").select("*").eq(
@@ -200,12 +201,14 @@ async def confirm_execute(
         }).eq("id", request.campaign_id).execute()
         
         # Create confirmation message
-        await supabase_service.create_message(
-            campaign_id=request.campaign_id,
-            role="assistant",
-            content="Perfect! I'm starting the asset generation now. This will take a few minutes...",
-            metadata={"event": "execution_confirmed"}
-        )
+        confirmation_msg = {
+            "campaign_id": request.campaign_id,
+            "role": "assistant",
+            "content": "Perfect! I'm starting the asset generation now. This will take a few minutes...",
+            "metadata": {"event": "execution_confirmed"},
+            "created_at": datetime.utcnow().isoformat()
+        }
+        supabase.table("chat_messages").insert(confirmation_msg).execute()
         
         # Start orchestrator agent in background
         orchestrator = get_orchestrator_agent()
