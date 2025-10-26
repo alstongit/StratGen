@@ -117,6 +117,39 @@ Return ONLY the short prompt, nothing else."""
             title_short = campaign_draft.get("title", "campaign")[:30]
             return f"{title_short} modern vibrant"
 
+    async def regenerate_image(
+        self,
+        campaign_id: str,
+        campaign_draft: Dict[str, Any],
+        day_number: int,
+        old_image: Dict[str, Any],
+        user_instruction: str
+    ) -> Dict[str, Any]:
+        """
+        Regenerate image by refining the prompt with user instruction and prior context.
+        """
+        prev_prompt = (old_image or {}).get("prompt", "")
+        guide = f"{prev_prompt}. {user_instruction}".strip()
+        # Build a short prompt considering caption if available
+        caption = ""
+        try:
+            # Attempt to fetch copy caption from associated content in old_image (optional)
+            caption = old_image.get("related_caption", "")
+        except Exception:
+            pass
+
+        short_prompt = await self._create_image_prompt(
+            campaign_draft=campaign_draft,
+            post_caption=caption or user_instruction,
+            day_number=day_number
+        )
+        # Append instruction hints but keep short
+        if user_instruction and len(short_prompt) < 50:
+            short_prompt = f"{short_prompt}, {user_instruction[:20]}".strip(", ")
+        image_data = await self.pollinations.generate_image(prompt=short_prompt, width=1024, height=1024)
+        image_data["prompt"] = short_prompt
+        return image_data
+
 # Global instance
 _image_agent = None
 

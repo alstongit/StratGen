@@ -14,36 +14,22 @@ if not os.getenv("GOOGLE_API_KEY"):
 
 CONTENT_SYSTEM_PROMPT = """You are an expert social media copywriter and content strategist.
 
-Your role is to create engaging, platform-optimized social media posts that drive engagement and conversions.
-
-When given a campaign strategy and day number, you will:
-1. Create compelling captions that match the brand voice and target audience
-2. Include relevant hashtags (5-10) that maximize reach
-3. Add a clear call-to-action (CTA)
-4. Write platform-specific copy (Instagram vs Twitter format)
-5. Include emojis strategically for better engagement
-6. Create a punchy headline/hook
-7. Write a detailed description for context
+Your role is to create platform-optimized social media posts.
 
 CRITICAL: Respond with ONLY a valid JSON object. No explanations, no markdown.
 
-Required JSON structure:
+Required JSON structure (only these fields):
 {
     "platform": "instagram",
     "caption": "Full post caption with emojis and line breaks",
-    "hashtags": ["#Hashtag1", "#Hashtag2", "#Hashtag3"],
-    "cta": "Clear call to action",
-    "headline": "Attention-grabbing headline",
-    "description": "Detailed post description/context"
+    "description": "Short description/context (optional longer form)",
+    "hashtags": ["#Hashtag1", "#Hashtag2"]
 }
 
 Guidelines:
-- Instagram: 125-150 characters for caption, use emojis, 5-10 hashtags
-- Twitter: 200-280 characters, 2-3 hashtags
-- Keep tone consistent with brand voice
-- Focus on benefits, not features
-- Create urgency when appropriate
-- Be authentic and conversational
+- Instagram caption length: ~125-150 chars recommended (but include full caption)
+- Provide 3-10 relevant hashtags (as a JSON array). Ensure each hashtag starts with '#'.
+- Do NOT include extra fields (headline, cta, etc.). If you must, ignore them — return only the fields above.
 """
 
 class ContentAgent:
@@ -98,31 +84,20 @@ class ContentAgent:
             post_time = day_info.get("time", "12:00 PM")
             
             # Build prompt
-            prompt = f"""Create a {primary_platform} post for Day {day_number} of this campaign:
+            prompt = f"""Create a {primary_platform} post for Day {day_number}.
+
+Return ONLY a JSON object with these keys: caption, description, hashtags, platform.
 
 CAMPAIGN: {title}
+TARGET AUDIENCE: {target_audience}
+THEMES: {', '.join(content_themes)}
 
-TARGET AUDIENCE:
-{target_audience}
-
-CONTENT THEMES:
-{', '.join(content_themes)}
-
-DAY {day_number} DETAILS:
+DAY DETAILS:
 - Content Type: {content_type}
-- Scheduled Time: {post_time}
+- Time: {post_time}
 
-STRATEGY NOTES:
-{additional_details}
-
-Create engaging copy that:
-1. Matches the content type ({content_type})
-2. Resonates with the target audience
-3. Aligns with content themes
-4. Is optimized for {primary_platform}
-5. Drives engagement and action
-
-Return ONLY the JSON object with caption, hashtags, CTA, headline, and description."""
+Instruction: produce an engaging caption and a short description/context. Provide 3-10 hashtags as a JSON array. Do NOT return other keys (headline, cta, etc.). Return ONLY JSON.
+"""
 
             # Generate response
             response = self.agent.run(prompt, stream=False)
@@ -147,6 +122,53 @@ Return ONLY the JSON object with caption, hashtags, CTA, headline, and descripti
             import traceback
             traceback.print_exc()
             raise
+    
+    async def regenerate_post_copy(
+        self,
+        campaign_draft: Dict[str, Any],
+        day_number: int,
+        old_content: Dict[str, Any],
+        user_instruction: str,
+        fields_to_modify: List[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Regenerate or modify copy for a specific day using the final draft, previous content,
+        a short instruction, and optionally a list of specific fields to modify.
+        If fields_to_modify is provided, instruct the model to only update those fields
+        and preserve all others.
+        """
+        title = campaign_draft.get("title", "Campaign")
+        platforms = campaign_draft.get("platforms", ["instagram"])
+        primary_platform = platforms[0] if platforms else "instagram"
+        content_themes = campaign_draft.get("content_themes", [])
+        # Build a clear targeted prompt
+        fields_note = ""
+        if fields_to_modify and len(fields_to_modify) > 0:
+            fields_note = f"ONLY modify these fields: {', '.join(fields_to_modify)}. Keep other fields unchanged."
+        else:
+            fields_note = "You may modify caption, description, and/or hashtags as needed."
+
+        prompt = f"""Regenerate the {primary_platform} copy for Day {day_number}.
+{fields_note}
+Apply this instruction: "{user_instruction}"
+Return ONLY the full JSON object with keys: caption, description, hashtags, platform.
+PREVIOUS COPY:
+{json.dumps(old_content)}
+"""
+        try:
+            response = self.agent.run(prompt, stream=False)
+            response_text = response.content if hasattr(response, 'content') else str(response)
+            new_copy = self._parse_json_response(response_text)
+            new_copy["platform"] = primary_platform
+            # Ensure fields not in new_copy are preserved from old_content
+            for k, v in (old_content or {}).items():
+                if k not in new_copy:
+                    new_copy[k] = v
+            # validate
+            return self._validate_copy(new_copy, primary_platform)
+        except Exception as e:
+            print(f"⚠️ Error regenerating copy, returning previous content: {e}")
+            return old_content
     
     def _parse_json_response(self, response_text: str) -> Dict[str, Any]:
         """Parse JSON from AI response."""
@@ -178,8 +200,6 @@ Return ONLY the JSON object with caption, hashtags, CTA, headline, and descripti
             "platform": platform,
             "caption": "Check out our latest campaign!",
             "hashtags": ["#Campaign", "#Marketing"],
-            "cta": "Learn more!",
-            "headline": "Exciting News",
             "description": "Campaign announcement"
         }
         

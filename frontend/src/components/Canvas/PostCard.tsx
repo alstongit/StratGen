@@ -8,7 +8,7 @@ interface PostCardProps {
 }
 
 export function PostCard({ post }: PostCardProps) {
-  const copyContent = post.copy?.content;
+  const copyContent = post.copy?.content || {};
   const imageContent = post.image?.content;
 
   // prefer storage_url then image_url
@@ -17,6 +17,14 @@ export function PostCard({ post }: PostCardProps) {
   const handleCopyCaption = () => {
     if (copyContent?.caption) navigator.clipboard.writeText(copyContent.caption);
   };
+
+  // normalize fields coming from ContentAgent
+  const caption = copyContent.caption || '';
+  const description = copyContent.description || '';
+  const headline = copyContent.headline || '';
+  const cta = copyContent.cta || '';
+  const platform = copyContent.platform || 'instagram';
+  const hashtags: string[] = Array.isArray(copyContent.hashtags) ? copyContent.hashtags : [];
 
   return (
     <Card className="overflow-hidden hover:shadow-lg transition-shadow">
@@ -48,30 +56,45 @@ export function PostCard({ post }: PostCardProps) {
       <div className="p-3">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-            {copyContent?.platform || 'Instagram'}
+            {platform}
           </span>
           <Instagram className="w-4 h-4 text-pink-500" />
         </div>
 
         {copyContent ? (
           <>
-            {copyContent.headline && (
-              <h3 className="font-semibold text-sm text-gray-900 mb-1 line-clamp-2">
-                {copyContent.headline}
-              </h3>
+            {/* optional headline (not primary) */}
+            {headline && (
+              <div className="text-xs text-gray-500 mb-1 line-clamp-2">{headline}</div>
             )}
 
-            {copyContent.caption && (
-              <p className="text-xs text-gray-600 line-clamp-3 mb-3">{copyContent.caption}</p>
+            {/* caption is primary */}
+            {caption && (
+              <h3 className="font-semibold text-sm text-gray-900 mb-1 leading-tight">{caption}</h3>
             )}
 
-            <div className="flex items-center gap-2 mb-3">
-              {copyContent.hashtags?.slice(0, 3).map((tag: string, i: number) => (
-                <span key={i} className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full">
-                  {tag}
-                </span>
-              ))}
-            </div>
+            {/* description secondary */}
+            {description && (
+              <p className="text-sm text-gray-600 mb-3">{description}</p>
+            )}
+
+            {/* CTA (if present) */}
+            {cta && (
+              <div className="mb-3">
+                <span className="text-xs font-medium text-white bg-indigo-600 px-2 py-1 rounded">{cta}</span>
+              </div>
+            )}
+
+            {/* Hashtags - show all */}
+            {hashtags.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                {hashtags.map((tag: string, i: number) => (
+                  <span key={i} className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full">
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
 
             <div className="flex gap-2">
               <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={handleCopyCaption}>

@@ -1,40 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { canvasAPI } from '@/lib/api';
 import type { CanvasData } from '@/types';
 import { PostCard } from '@/components/Canvas/PostCard';
 import { InfluencerCard } from '@/components/Canvas/InfluencerCard';
 import { ExecutionPlanCard } from '@/components/Canvas/ExecutionPlanCard';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Loader2, AlertCircle, FileDown } from 'lucide-react';
+import CanvasChatBar from '@/components/Canvas/CanvasChatBar';
+import { useRealtimeCanvas } from '@/hooks/useRealtimeCanvas';
 
 export default function CanvasPage() {
   const { campaignId } = useParams<{ campaignId: string }>();
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<CanvasData | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (campaignId) loadCanvasData(campaignId);
-    else {
-      setError('No campaign ID provided');
-      setLoading(false);
-    }
-  }, [campaignId]);
-
-  const loadCanvasData = async (id: string) => {
-    try {
-      setLoading(true);
-      setError(null);
-      const canvasData = await canvasAPI.getCanvasData(id);
-      setData(canvasData);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load canvas');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { data, loading, error, refetch } = useRealtimeCanvas(campaignId);
 
   if (loading) {
     return (
@@ -75,7 +54,7 @@ export default function CanvasPage() {
     );
   }
 
-  const { campaign, posts, influencers, plan, stats } = data;
+  const { campaign, posts, influencers, plan, stats } = data as CanvasData;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -113,7 +92,7 @@ export default function CanvasPage() {
       {/* Main - posts grid + influencer column */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="lg:flex lg:items-start lg:gap-8">
-          {/* Posts column - center, grid 2 per row on md+; cards smaller so two can sit side-by-side */}
+          {/* Posts column */}
           <div className="lg:flex-1 lg:mx-auto w-full max-w-4xl">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Content Calendar ({posts.length})</h2>
 
@@ -128,11 +107,10 @@ export default function CanvasPage() {
             </div>
           </div>
 
-          {/* Influencers column - increased width so more cards fit; taller scroll area */}
+          {/* Influencers column */}
           <aside className="mt-8 lg:mt-0 lg:w-[420px] flex-shrink-0">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Recommended Influencers ({influencers.length})</h3>
             <div className="bg-white rounded-lg border overflow-hidden">
-              {/* taller so ~3+ compact influencer cards are visible at once */}
               <div className="h-[640px] overflow-y-auto p-3 space-y-3">
                 {influencers.length > 0 ? (
                   influencers.map((asset) => <InfluencerCard key={asset.id} asset={asset} />)
@@ -145,10 +123,20 @@ export default function CanvasPage() {
         </div>
 
         {/* Execution plan below full width */}
-        <div className="mt-10">
+        <div className="mt-10 mb-20">
           <ExecutionPlanCard asset={plan} />
         </div>
       </div>
+
+      {campaignId && (
+        <CanvasChatBar
+          campaignId={campaignId}
+          onUpdated={() => {
+            // Not strictly needed with realtime, but useful after sync operations
+            refetch();
+          }}
+        />
+      )}
     </div>
   );
 }

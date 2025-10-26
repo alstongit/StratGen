@@ -1,6 +1,8 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 import asyncio
+import traceback
+import re
 
 from services.supabase_service import get_supabase_service
 from agents.content_agent import get_content_agent
@@ -84,7 +86,6 @@ class OrchestratorAgent:
             print(f"✅ Copy generation completed: {len(copy_assets)} posts")
             
             # PHASE 2: Generate images, influencers, and plan in parallel
-            # These can fail individually without failing entire campaign
             print(f"\n{'='*60}")
             print(f"PHASE 2: PARALLEL ASSET GENERATION (Non-Critical)")
             print(f"{'='*60}")
@@ -120,7 +121,7 @@ class OrchestratorAgent:
                     count = len(result) if isinstance(result, list) else (1 if result else 0)
                     print(f"✅ {task_names[i]} completed: {count} items")
             
-            # Mark as completed (even with partial success)
+            # Mark as completed
             end_time = datetime.utcnow()
             execution_time = (end_time - start_time).total_seconds()
             
@@ -132,7 +133,7 @@ class OrchestratorAgent:
             
             # Send completion message
             success_count = sum([
-                1,  # Copy always succeeds (we checked earlier)
+                1,
                 1 if image_assets else 0,
                 1 if influencer_assets else 0,
                 1 if plan_asset else 0
@@ -156,7 +157,6 @@ class OrchestratorAgent:
         
         except Exception as e:
             print(f"❌ CRITICAL ERROR in orchestrator: {e}")
-            import traceback
             traceback.print_exc()
             
             await self._update_campaign_status(
@@ -260,7 +260,6 @@ class OrchestratorAgent:
                 
             except Exception as e:
                 print(f"⚠️ Error generating image for day {copy_asset.get('day_number')}: {e}")
-                # Continue with other images
         
         print(f"✅ All images generated: {len(image_assets)} images")
         return image_assets
@@ -268,7 +267,8 @@ class OrchestratorAgent:
     async def _generate_influencers(
         self,
         campaign_id: str,
-        final_draft: Dict[str, Any]
+        final_draft: Dict[str, Any],
+        user_instruction: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Find and save influencers"""
         print(f"\n👥 Finding influencers...")
@@ -276,7 +276,8 @@ class OrchestratorAgent:
         try:
             influencers = await self.influencer_agent.find_influencers(
                 campaign_draft=final_draft,
-                count=10
+                count=10,
+                user_instruction=user_instruction
             )
             
             if not influencers:
@@ -344,7 +345,7 @@ class OrchestratorAgent:
         self,
         campaign_id: str,
         asset_type: str,
-        day_number: int,
+        day_number: Optional[int],
         content: Dict[str, Any],
         status: str = "completed"
     ) -> str:
@@ -365,8 +366,8 @@ class OrchestratorAgent:
         self,
         campaign_id: str,
         status: str,
-        execution_started_at: datetime = None,
-        execution_completed_at: datetime = None
+        execution_started_at: Optional[datetime] = None,
+        execution_completed_at: Optional[datetime] = None
     ):
         """Update campaign status in database"""
         update_data = {
@@ -392,6 +393,292 @@ class OrchestratorAgent:
             content=message,
             metadata={"event": "execution_progress"}
         )
+    
+    async def execute_modification_plan(
+        self,
+        campaign_id: str,
+        final_draft: Dict[str, Any],
+        actions: List[Dict[str, Any]],
+        modification_id: str
+    ) -> Dict[str, Any]:
+        """Execute modification plan from RegenerationAgent."""
+        start = datetime.utcnow()
+        results = []
+        
+        print(f"\n🎯 Executing modification plan: {len(actions)} action(s)")
+        
+        for i, action in enumerate(actions, 1):
+            try:
+                agent_name = action.get("agent")
+                operation = action.get("operation")
+                target = action.get("target", {})
+                instruction = action.get("instruction", "")
+                context = action.get("context", {})
+                
+                print(f"\n--- Action {i}/{len(actions)} ---")
+                print(f"Agent: {agent_name}")
+                print(f"Operation: {operation}")
+                print(f"Instruction: {instruction[:80]}...")
+                
+                # Route to appropriate agent
+                if agent_name == "content_agent":
+                    result = await self._execute_content_modification(
+                        campaign_id, final_draft, target, instruction, context, modification_id
+                    )
+                elif agent_name == "image_agent":
+                    result = await self._execute_image_modification(
+                        campaign_id, final_draft, target, instruction, context, modification_id
+                    )
+                elif agent_name == "influencer_agent":
+                    result = await self._execute_influencer_modification(
+                        campaign_id, final_draft, target, instruction, context, modification_id
+                    )
+                elif agent_name == "plan_agent":
+                    result = await self._execute_plan_modification(
+                        campaign_id, final_draft, target, instruction, context, modification_id
+                    )
+                else:
+                    result = {"error": f"Unknown agent: {agent_name}"}
+                
+                results.append({"action": i, "success": "error" not in result, "result": result})
+                print(f"✅ Action {i} completed")
+            
+            except Exception as e:
+                print(f"❌ Action {i} failed: {e}")
+                traceback.print_exc()
+                results.append({"action": i, "success": False, "error": str(e)})
+        
+        # Update modification record
+        success_count = sum(1 for r in results if r.get("success"))
+        try:
+            self.supabase_service.supabase.table("canvas_modifications").update({
+                "new_content": {"results": results, "success_count": success_count, "total": len(actions)}
+            }).eq("id", modification_id).execute()
+        except Exception:
+            pass
+        
+        end = datetime.utcnow()
+        execution_time = (end - start).total_seconds()
+        
+        print(f"\n✅ Modification plan executed: {success_count}/{len(actions)} successful ({execution_time:.1f}s)")
+        
+        return {
+            "total_actions": len(actions),
+            "successful": success_count,
+            "results": results,
+            "execution_time": execution_time
+        }
+    
+    async def _execute_content_modification(
+        self, campaign_id: str, final_draft: Dict[str, Any],
+        target: Dict[str, Any], instruction: str, context: Dict[str, Any],
+        modification_id: str
+    ) -> Dict[str, Any]:
+        """Execute content modification."""
+        if context is None:
+            context = {}
+        
+        day_number = target.get("day_number")
+        asset_id = target.get("asset_id")
+        previous_content = context.get("previous_content", {})
+        fields_to_modify = context.get("fields_to_modify")
+        
+        # Always fetch current asset to get asset_id
+        if day_number:
+            current = await self._get_asset(campaign_id, "copy", day_number)
+            if current:
+                asset_id = current["id"]
+                if not previous_content:
+                    previous_content = current.get("content", {})
+            else:
+                raise ValueError(f"No copy asset found for day {day_number}")
+        else:
+            asset_id = target.get("asset_id")
+        
+        if not previous_content:
+            raise ValueError(f"No copy asset found for day {day_number}")
+        
+        await self._version_asset(asset_id, previous_content, {"operation": "modify", "modification_id": modification_id})
+        
+        new_content = await self.content_agent.regenerate_post_copy(
+            campaign_draft=final_draft,
+            day_number=day_number,
+            old_content=previous_content,
+            user_instruction=instruction,
+            fields_to_modify=fields_to_modify
+        )
+        
+        await self._update_asset_content(asset_id, new_content, "completed", {"modification_id": modification_id})
+        
+        return {"asset_id": asset_id, "day_number": day_number, "asset_type": "copy"}
+    
+    async def _execute_image_modification(
+        self, campaign_id: str, final_draft: Dict[str, Any],
+        target: Dict[str, Any], instruction: str, context: Dict[str, Any],
+        modification_id: str
+    ) -> Dict[str, Any]:
+        """Execute image modification."""
+        if context is None:
+            context = {}
+        
+        day_number = target.get("day_number")
+        asset_id = target.get("asset_id")
+        previous_content = context.get("previous_content", {})
+        
+        # Always fetch current asset to get asset_id
+        if day_number:
+            current = await self._get_asset(campaign_id, "image", day_number)
+            if current:
+                asset_id = current["id"]
+                if not previous_content:
+                    previous_content = current.get("content", {})
+            else:
+                raise ValueError(f"No image asset found for day {day_number}")
+        else:
+            asset_id = target.get("asset_id")
+        
+        if not previous_content:
+            raise ValueError(f"No image asset found for day {day_number}")
+        
+        await self._version_asset(asset_id, previous_content, {"operation": "modify", "modification_id": modification_id})
+        await self._set_asset_status(asset_id, "generating", {"modification_id": modification_id})
+        
+        new_image = await self.image_agent.regenerate_image(
+            campaign_id=campaign_id,
+            campaign_draft=final_draft,
+            day_number=day_number,
+            old_image=previous_content,
+            user_instruction=instruction
+        )
+        
+        await self._update_asset_content(asset_id, new_image, "completed", {"modification_id": modification_id})
+        
+        return {"asset_id": asset_id, "day_number": day_number, "asset_type": "image"}
+    
+    async def _execute_influencer_modification(
+        self, campaign_id: str, final_draft: Dict[str, Any],
+        target: Dict[str, Any], instruction: str, context: Dict[str, Any],
+        modification_id: str
+    ) -> Dict[str, Any]:
+        """Execute influencer search."""
+        if context is None:
+            context = {}
+        
+        prev_assets = self.supabase_service.supabase.table("campaign_assets").select("*").eq("campaign_id", campaign_id).eq("asset_type", "influencer").execute().data or []
+        prev_snapshot = [a.get("content") for a in prev_assets]
+        
+        print(f"👥 Finding influencers with instruction: {instruction}")
+        
+        new_list = await self.influencer_agent.find_influencers(
+            campaign_draft=final_draft,
+            count=10,
+            user_instruction=instruction
+        )
+        
+        new_ids = []
+        for item in new_list:
+            asset_id = await self._save_asset(
+                campaign_id=campaign_id,
+                asset_type="influencer",
+                day_number=None,
+                content=item,
+                status="completed"
+            )
+            new_ids.append(asset_id)
+        
+        await self._update_modification(modification_id, None, {"list": prev_snapshot}, {"list": new_list})
+        
+        print(f"✅ Found {len(new_ids)} new influencers")
+        return {"asset_ids": new_ids, "count": len(new_ids), "asset_type": "influencer"}
+    
+    async def _execute_plan_modification(
+        self, campaign_id: str, final_draft: Dict[str, Any],
+        target: Dict[str, Any], instruction: str, context: Dict[str, Any],
+        modification_id: str
+    ) -> Dict[str, Any]:
+        """Execute plan modification."""
+        # Safely handle missing/null context
+        if context is None:
+            context = {}
+        
+        plan_section = target.get("plan_section")
+        previous_content = context.get("previous_content", {})
+        
+        if not previous_content:
+            plan_asset = self.supabase_service.supabase.table("campaign_assets").select("*").eq("campaign_id", campaign_id).eq("asset_type", "plan").limit(1).execute()
+            plan_row = (plan_asset.data or [None])[0]
+            if plan_row:
+                previous_content = plan_row.get("content", {})
+                asset_id = plan_row["id"]
+            else:
+                # No existing plan — create new one
+                print("📋 No existing plan found, creating new plan...")
+                new_plan = await self.plan_agent.create_execution_plan(
+                    campaign_draft=final_draft,
+                    generated_assets=[]  # empty for now
+                )
+                asset_id = await self._save_asset(
+                    campaign_id=campaign_id,
+                    asset_type="plan",
+                    day_number=None,
+                    content=new_plan,
+                    status="completed"
+                )
+                await self._update_modification(modification_id, asset_id, {}, new_plan)
+                return {"asset_id": asset_id, "asset_type": "plan", "section": plan_section}
+        else:
+            asset_id = target.get("asset_id")
+        
+        await self._version_asset(asset_id, previous_content, {"operation": "modify", "modification_id": modification_id})
+        
+        new_plan = await self.plan_agent.regenerate_plan(
+            campaign_draft=final_draft,
+            old_plan=previous_content,
+            user_instruction=instruction,
+            section=plan_section
+        )
+        
+        await self._update_asset_content(asset_id, new_plan, "completed", {"modification_id": modification_id})
+        await self._update_modification(modification_id, asset_id, previous_content, new_plan)
+        
+        return {"asset_id": asset_id, "asset_type": "plan", "section": plan_section}
+    
+    async def _get_asset(self, campaign_id: str, asset_type: str, day_number: int) -> Optional[Dict[str, Any]]:
+        res = self.supabase_service.supabase.table("campaign_assets").select("*").eq("campaign_id", campaign_id).eq("asset_type", asset_type).eq("day_number", day_number).limit(1).execute()
+        return (res.data or [None])[0]
+    
+    async def _version_asset(self, asset_id: str, prev_content: Dict[str, Any], generation_metadata: Dict[str, Any]):
+        res = self.supabase_service.supabase.table("asset_versions").select("version_number").eq("asset_id", asset_id).order("version_number", desc=True).limit(1).execute()
+        last = (res.data or [{"version_number": 0}])[0]["version_number"]
+        self.supabase_service.supabase.table("asset_versions").insert({
+            "asset_id": asset_id,
+            "version_number": int(last) + 1,
+            "content": prev_content,
+            "generation_metadata": generation_metadata,
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
+    
+    async def _set_asset_status(self, asset_id: str, status: str, gen_meta: Dict[str, Any]):
+        self.supabase_service.supabase.table("campaign_assets").update({
+            "status": status,
+            "generation_metadata": gen_meta,
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", asset_id).execute()
+    
+    async def _update_asset_content(self, asset_id: str, new_content: Dict[str, Any], status: str, gen_meta: Dict[str, Any]):
+        self.supabase_service.supabase.table("campaign_assets").update({
+            "content": new_content,
+            "status": status,
+            "generation_metadata": gen_meta,
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", asset_id).execute()
+    
+    async def _update_modification(self, modification_id: str, affected_asset_id: Optional[str], prev: Any, new: Any):
+        self.supabase_service.supabase.table("canvas_modifications").update({
+            "affected_asset_id": affected_asset_id,
+            "previous_content": prev,
+            "new_content": new
+        }).eq("id", modification_id).execute()
 
 # Global instance
 _orchestrator_agent = None

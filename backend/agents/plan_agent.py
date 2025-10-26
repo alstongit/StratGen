@@ -1,8 +1,7 @@
 from agno.agent import Agent
 from agno.models.google import Gemini
-from typing import Dict, Any, List
-import json
-import os
+from typing import Dict, Any, List, Optional
+import os, json
 
 # Ensure GOOGLE_API_KEY is available
 if not os.getenv("GOOGLE_API_KEY"):
@@ -12,38 +11,9 @@ if not os.getenv("GOOGLE_API_KEY"):
     except Exception as e:
         print(f"❌ Could not load API key: {e}")
 
-PLAN_SYSTEM_PROMPT = """You are an expert campaign manager and execution strategist.
-
-Your role is to create detailed, actionable execution plans for marketing campaigns.
-
-When given a campaign strategy and generated assets, you will:
-1. Break down the campaign into clear phases (Pre-Launch, Launch, Post-Launch)
-2. Create specific action items for each phase
-3. Build a realistic timeline
-4. Generate a comprehensive checklist
-5. Provide strategic recommendations
-
-CRITICAL: Respond with ONLY a valid JSON object. No explanations, no markdown.
-
-Required JSON structure:
-{
-    "phases": [
-        {
-            "name": "Phase Name",
-            "duration": "Timeline",
-            "steps": ["Step 1", "Step 2", "Step 3"]
-        }
-    ],
-    "timeline": "Overall campaign timeline description",
-    "checklist": [
-        {"task": "Task description", "completed": false, "priority": "high/medium/low"}
-    ],
-    "key_milestones": ["Milestone 1", "Milestone 2"],
-    "success_metrics": ["Metric 1", "Metric 2"],
-    "recommendations": "Strategic recommendations and tips"
-}
-
-Be specific, actionable, and realistic."""
+PLAN_SYSTEM_PROMPT = """You are an execution planner for marketing campaigns.
+Return ONLY valid JSON with fields: phases[], checklist[], key_milestones[], success_metrics[], recommendations.
+"""
 
 class PlanAgent:
     """Agent responsible for creating campaign execution plans."""
@@ -152,6 +122,48 @@ Return ONLY the JSON object."""
             traceback.print_exc()
             raise
     
+    async def regenerate_plan(self, campaign_draft: Dict[str, Any], old_plan: Dict[str, Any], user_instruction: str, section: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Regenerate entire plan (v1) or a section if provided (v2-lite merge).
+        """
+        try:
+            if not section:
+                prompt = f"""Regenerate this execution plan with the user's request applied: "{user_instruction}".
+Maintain structure and improve clarity. Return only JSON.
+
+CAMPAIGN:
+{json.dumps(campaign_draft)}
+
+CURRENT PLAN:
+{json.dumps(old_plan)}"""
+                resp = self.agent.run(prompt, stream=False)
+                text = resp.content if hasattr(resp, "content") else str(resp)
+                plan = self._parse_json(text)
+                return plan
+            else:
+                # Sectional update: generate only that section and merge
+                prompt = f"""Update ONLY the {section} section of the plan per: "{user_instruction}".
+Return only JSON with a single key "{section}".
+CURRENT PLAN (for context): {json.dumps(old_plan)}"""
+                resp = self.agent.run(prompt, stream=False)
+                text = resp.content if hasattr(resp, "content") else str(resp)
+                patch = self._parse_json(text)
+                new_plan = dict(old_plan or {})
+                if section in patch:
+                    new_plan[section] = patch[section]
+                return new_plan
+        except Exception as e:
+            print(f"⚠️ Error regenerating plan: {e}")
+            return old_plan or {}
+
+    def _parse_json(self, text: str) -> Dict[str, Any]:
+        t = text.strip()
+        if t.startswith("```json"):
+            t = t[7:]
+        if t.endswith("```"):
+            t = t[:-3]
+        return json.loads(t or "{}")
+
     def _parse_json_response(self, response_text: str) -> Dict[str, Any]:
         """Parse JSON from AI response."""
         try:
@@ -168,12 +180,34 @@ Return ONLY the JSON object."""
             
             cleaned = cleaned.strip()
             
-            return json.loads(cleaned)
+            # Try parse; if fail, attempt to fix common issues
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError as e_inner:
+                # Common issue: missing trailing comma or quote. Try lenient parse.
+                # Use a minimal repair heuristic or fallback to empty plan.
+                print(f"⚠️ JSON parse failed at char {e_inner.pos}: {e_inner.msg}")
+                # Attempt to truncate at error position and close braces
+                truncated = cleaned[:e_inner.pos].rstrip(",")
+                # Try closing JSON object/array
+                if truncated.count("{") > truncated.count("}"):
+                    truncated += "}" * (truncated.count("{") - truncated.count("}"))
+                if truncated.count("[") > truncated.count("]"):
+                    truncated += "]" * (truncated.count("[") - truncated.count("]"))
+                try:
+                    partial = json.loads(truncated)
+                    print("✅ Recovered partial JSON via truncation")
+                    return partial
+                except Exception:
+                    # Give up parsing, return empty plan (will be filled by _validate_plan)
+                    print("❌ Could not recover JSON; returning empty plan structure")
+                    return {}
         
         except json.JSONDecodeError as e:
             print(f"❌ Failed to parse JSON: {e}")
             print(f"Response was: {response_text[:500]}...")
-            raise ValueError(f"Invalid JSON response: {e}")
+            # Instead of raising, return empty plan so _validate_plan can fill defaults
+            return {}
     
     def _validate_plan(self, plan_data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and fix plan structure."""

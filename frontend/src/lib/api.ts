@@ -28,7 +28,9 @@ api.interceptors.request.use(async (config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    console.error('API Error:', error.response?.status, error.response?.data);
+    const status = error?.response?.status;
+    const data = error?.response?.data;
+    console.error('API Error:', status ?? 'no-response', data ?? error.message);
     return Promise.reject(error);
   }
 );
@@ -82,5 +84,17 @@ export const canvasAPI = {
     return response.data;
   },
 };
+
+export async function modifyCanvas(campaignId: string, message: string) {
+  // Use axios instance so request goes to API_URL (backend), not Vite dev server
+  const response = await api.post(`/canvas/${campaignId}/modify`, { message });
+  return response.data;
+}
+
+export async function getCanvasModification(campaignId: string, modificationId: string) {
+  // Use axios for consistent baseURL handling
+  const response = await api.get(`/canvas/${campaignId}/modifications/${modificationId}`);
+  return response.data;
+}
 
 export default api;

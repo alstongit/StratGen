@@ -10,3 +10,6 @@ python-multipart
 httpx
 agno
 aiohttp
+selenium
+undetected-chromedriver
+pillow
