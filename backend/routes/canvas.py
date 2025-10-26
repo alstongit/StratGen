@@ -8,6 +8,7 @@ from middleware.auth_middleware import get_current_user
 from agents.modification_classifier import classify_modification
 from agents.orchestrator_agent import get_orchestrator_agent
 from agents.regeneration_agent import get_regeneration_agent
+from services.instagram_automation_service import get_instagram_automation_service
 from config.supabase_client import get_admin_supabase_client
 
 router = APIRouter(prefix="/canvas", tags=["canvas"])
@@ -335,3 +336,177 @@ async def get_modification_status(
         "previous_content": mod.get("previous_content") if is_done else None,
         "new_content": mod.get("new_content") if is_done else None
     }
+
+@router.post("/{campaign_id}/automate-instagram")
+async def automate_instagram_posting(
+    campaign_id: str,
+    background: BackgroundTasks,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Trigger automated Instagram posting for campaign."""
+    try:
+        supabase = get_admin_supabase_client()
+        
+        # Verify campaign ownership
+        campaign_result = supabase.table("campaigns").select("*").eq(
+            "id", campaign_id
+        ).eq("user_id", current_user["sub"]).execute()
+        
+        if not campaign_result.data:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        
+        # Fetch posts with images
+        posts_result = supabase.table("campaign_assets").select("*").eq(
+            "campaign_id", campaign_id
+        ).in_("asset_type", ["copy", "image"]).order("day_number").execute()
+        
+        assets = posts_result.data
+        
+        # Organize by day
+        days_map = {}
+        for asset in assets:
+            day_num = asset.get("day_number")
+            if day_num not in days_map:
+                days_map[day_num] = {"copy": None, "image": None}
+            
+            if asset.get("asset_type") == "copy":
+                days_map[day_num]["copy"] = asset
+            elif asset.get("asset_type") == "image":
+                days_map[day_num]["image"] = asset
+        
+        posts = [
+            {"day_number": day, "copy": days_map[day]["copy"], "image": days_map[day]["image"]}
+            for day in sorted(days_map.keys())
+            if days_map[day]["copy"] and days_map[day]["image"]
+        ]
+        
+        if not posts:
+            raise HTTPException(
+                status_code=400,
+                detail="No complete posts found (need both copy and image)"
+            )
+        
+        print(f"📸 Found {len(posts)} posts ready for Instagram automation")
+        
+        # Trigger background task
+        background.add_task(
+            _execute_instagram_automation,
+            campaign_id,
+            current_user["sub"],
+            posts
+        )
+        
+        return {
+            "status": "accepted",
+            "total_posts": len(posts),
+            "message": f"Instagram automation started for {len(posts)} posts"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error starting Instagram automation: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def _execute_instagram_automation(
+    campaign_id: str,
+    user_id: str,
+    posts: List[Dict[str, Any]]
+):
+    """Background task to execute Instagram automation."""
+    supabase = get_admin_supabase_client()
+    
+    try:
+        # Log execution start
+        log_id = str(uuid.uuid4())
+        supabase.table("agent_execution_logs").insert({
+            "id": log_id,
+            "campaign_id": campaign_id,
+            "agent_name": "instagram_automation",
+            "execution_type": "automate_posting",
+            "status": "started",
+            "input_data": {"total_posts": len(posts)},
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
+        
+        # Run automation
+        ig_service = get_instagram_automation_service()
+        result = await ig_service.automate_campaign_posting(
+            posts=posts,
+            delay_between_posts=300  # 5 minutes
+        )
+        
+        # Create scheduled_posts records for each post
+        for i, post in enumerate(posts):
+            copy_asset = post.get("copy")
+            image_asset = post.get("image")
+            post_result = result.get("results", [])[i] if i < len(result.get("results", [])) else {}
+            
+            scheduled_time = datetime.utcnow()  # Already posted
+            status = "posted" if post_result.get("success") else "failed"
+            
+            supabase.table("scheduled_posts").insert({
+                "campaign_id": campaign_id,
+                "asset_id": copy_asset.get("id"),
+                "platform": "instagram",
+                "scheduled_time": scheduled_time.isoformat(),
+                "status": status,
+                "posted_at": scheduled_time.isoformat() if status == "posted" else None,
+                "platform_post_url": post_result.get("post_url"),
+                "error_message": post_result.get("error"),
+                "created_at": datetime.utcnow().isoformat()
+            }).execute()
+        
+        # Update execution log
+        supabase.table("agent_execution_logs").update({
+            "status": "completed" if result.get("success") else "failed",
+            "output_data": result,
+            "error_message": result.get("error")
+        }).eq("id", log_id).execute()
+        
+        print(f"✅ Instagram automation completed: {result.get('posts_published')}/{len(posts)} posts")
+    
+    except Exception as e:
+        print(f"❌ Instagram automation background task failed: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Log failure
+        try:
+            supabase.table("agent_execution_logs").update({
+                "status": "failed",
+                "error_message": str(e)
+            }).eq("id", log_id).execute()
+        except:
+            pass
+
+@router.get("/{campaign_id}/scheduled-posts")
+async def get_scheduled_posts(
+    campaign_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get scheduled/posted status for campaign."""
+    try:
+        supabase = get_admin_supabase_client()
+        
+        # Verify ownership
+        campaign_result = supabase.table("campaigns").select("id,user_id").eq(
+            "id", campaign_id
+        ).eq("user_id", current_user["sub"]).execute()
+        
+        if not campaign_result.data:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        
+        # Fetch scheduled posts
+        posts_result = supabase.table("scheduled_posts").select("*").eq(
+            "campaign_id", campaign_id
+        ).order("scheduled_time", desc=False).execute()
+        
+        return {"posts": posts_result.data}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
