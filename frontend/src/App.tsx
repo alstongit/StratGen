@@ -6,6 +6,7 @@ import {StrategyPage} from '@/pages/StrategyPage'
 import CanvasPage from '@/pages/CanvasPage'
 import {ProtectedRoute} from '@/components/Common/ProtectedRoute'
 import './App.css'
+import Landing from '@/pages/Landing'
 
 function App() {
   const { user, loading } = useAuth()
@@ -21,6 +22,8 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/" element={<Landing />} />
+
         <Route path="/login" element={user ? <Navigate to="/dashboard" /> : <Login />} />
         
         <Route
