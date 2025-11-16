@@ -69,12 +69,12 @@ class DraftAgent:
         try:
             # Create Gemini model instances
             strategy_model = Gemini(
-                id="gemini-2.0-flash-exp",
+                id="gemini-2.0-flash-lite",
                 api_key=os.getenv("GOOGLE_API_KEY")
             )
             
             conversation_model = Gemini(
-                id="gemini-2.0-flash-exp",
+                id="gemini-2.0-flash-lite",
                 api_key=os.getenv("GOOGLE_API_KEY")
             )
             

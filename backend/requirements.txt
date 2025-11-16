@@ -1,15 +1,28 @@
 fastapi
 uvicorn[standard]
 python-dotenv
-supabase
-google-generativeai
 pydantic
 pydantic-settings
+
+# Supabase + HTTP
+supabase
+httpx
+requests
+aiohttp
+
+# Google AI (both clients are used in codebase)
+google-generativeai
+google-genai
+tenacity
+
+# Auth
 python-jose[cryptography]
 python-multipart
-httpx
+
+# Agents / AI orchestration
 agno
-aiohttp
+
+# Automation (used by instagram_automation_service)
 selenium
 undetected-chromedriver
 pillow
